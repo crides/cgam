@@ -6,16 +6,17 @@ import (
     "io"
     "math"
     "os"
+    "os/signal"
+    "syscall"
     "reflect"
     "regexp"
     "strconv"
     "strings"
 )
 // TODO 
-// 1. Implement `[` and `]`, and then the rest functions in `/`;
-// 2. Implement signal catching, and pretty `Bye!`'s;
-// 3. 
-type Memo struct {// <<<<
+// 1. Implement signal catching, and pretty `Bye!`'s;
+// The memo for recursive functions (`y`)// <<<<
+type Memo struct {
     block   *Block
     arity   int
     cache   map[interface{}]interface{}
@@ -50,7 +51,6 @@ func NewStack(x []interface{}) *Stack {
 
 func (x * Stack) Push(a interface{}) {
     *x = append(wrapa(a), *x...)
-    //fmt.Println("Push(): ", x)
 }
 
 func (x * Stack) Pusha(as *Stack) {
@@ -113,14 +113,23 @@ func (x * Stack) Reverse() {    // Reverse in-place
     }
 }
 // >>>>
-type Environ struct {// <<<<
+// The environment// <<<<
+type Environ struct {
     stack   *Stack
     marks   []int
     memo    *Memo
+    vars    []interface{}
+    args    []string
 }
 
 func NewEnviron() *Environ {
-    return &Environ{NewStack(nil), make([]int, 0), nil}
+    env := &Environ{NewStack(nil),
+                    make([]int, 0),
+                    nil,
+                    make([]interface{}, 0),
+                    os.Args[1:]}
+    env.InitVars()
+    return env
 }
 
 func (env * Environ) SetMemo(m * Memo) {
@@ -148,6 +157,22 @@ func (env * Environ) PopMark() {
     wrapped := NewStack((*env.stack)[:end])
     wrapped.Reverse()       // For compat
     *env.stack = append(wrapa([]interface{}(*wrapped)), (*env.stack)[end:]...)
+}
+
+// Variables
+func (env * Environ) getVar(c rune) interface{} {
+    if c >= 'A' && c <= 'Z' {
+        return env.vars[c - 'A']
+    }
+    panic("Invalid variable name")
+}
+
+func (env * Environ) InitVars() {
+    for i := 0; i <= 10; i ++ {
+        env.vars = append(env.vars, 10 + i)
+    }
+    env.vars = append(env.vars, wrapa([]rune{}, []rune{}, []rune{'\n'}, []rune{}, math.Pi, []rune{}, []rune{}, []rune{' '}, 0, 0, 0, -1, 1, 2, 3)...)
+    //                                 L   M    N    O   P        Q   R    S   T  U  V  W   X  Y  Z
 }
 // >>>>
 // Type predicates//<<<<
@@ -279,7 +304,11 @@ func any_double(a, b interface{}) bool {
     return any_of(a, b, "float64")
 }
 //>>>>
-// Type conversions//<<<<
+// Type conversions// <<<<
+func not_convertible(a interface{}, typ string) {
+    panic(fmt.Sprintf("Cannot convert %s (%T) to %s!", type_of(a), a, typ))
+}
+
 func to_d(a interface{}) float64 {
     switch b := a.(type) {
     case int:
@@ -292,14 +321,20 @@ func to_d(a interface{}) float64 {
         r, _ := strconv.ParseFloat(b, 64)
         return r
     default:
-        panic(fmt.Sprintf("Cannot convert %T to double!", a))
+        not_convertible(a, "double")
     }
+    return 0
 }
 
 func to_i(a interface{}) int {
     switch b := a.(type) {
     case int:
         return b
+    case bool:
+        if b {
+            return 1
+        }
+        return 0
     case rune:
         return int(b)
     case float64:
@@ -308,8 +343,9 @@ func to_i(a interface{}) int {
         r, _ := strconv.ParseInt(b, 10, 0)
         return int(r)
     default:
-        panic(fmt.Sprintf("Cannot convert %T to int!", a))
+        not_convertible(a, "int")
     }
+    return 0
 }
 
 func to_l(a interface{}) []interface{} {
@@ -323,8 +359,9 @@ func to_l(a interface{}) []interface{} {
         }
         return as
     default:
-        panic(fmt.Sprintf("Cannot convert %s to list!", type_of(a)))
+        not_convertible(a, "list")
     }
+    return nil
 }
 
 func to_b(a interface{}) *Block {
@@ -332,8 +369,9 @@ func to_b(a interface{}) *Block {
     case *Block:
         return b
     default:
-        panic(fmt.Sprintf("Cannot convert %T to Block!", a))
+        not_convertible(a, "Block")
     }
+    return nil
 }
 
 func to_c(a interface{}) rune {
@@ -345,8 +383,9 @@ func to_c(a interface{}) rune {
     case float64:
         return rune(int(b))
     default:
-        panic(fmt.Sprintf("Cannot convert %T to char!", a))
+        not_convertible(a, "char")
     }
+    return 0
 }
 
 func to_s(a interface{}) string {
@@ -386,6 +425,22 @@ func to_v(a interface{}) string {       // To value string
         }
         panic(fmt.Sprintf("Invalid type %T!", b))
     }
+}
+
+func to_bool(a interface{}) bool {
+    switch b := a.(type) {
+    case int, rune:
+        return ! (b == 0)
+    case float64:
+        return ! (b == 0)
+    case []interface{}:
+        return ! (len(b) == 0)
+    case []rune:
+        return ! (len(b) == 0)
+    default:
+        not_convertible(a, "bool")
+    }
+    return false
 }
 //>>>>
 // Block//<<<<
@@ -470,11 +525,11 @@ func op_pushVar(c rune) *Op {
             "",
             0x00,
             func(env * Environ, x * Stack) *Stack {
-                content := getVar(c)
-                if ! is_b(content) {
-                    x.Push(content)
+                a := env.getVar(c)
+                if ! is_b(a) {
+                    x.Push(a)
                 } else {
-                    to_b(content).Run(env)
+                    to_b(a).Run(env)
                 }
                 return nil
             }}}}
@@ -532,30 +587,20 @@ func (op * Op) Call(env * Environ) {
     // Try to match signature
     for i, tf := range op.Funcs {
         match = match_sign(tf, env.stack)
-        //fmt.Println("Match:", op.Name, tf.Sign, match)
         if match == 0 {      // Not matched
             goto next_func
         }
 
         // Signature matched
         func_no = byte(i)
-        //fmt.Println("Selected signature:", tf.Sign)
         func_arity = byte(len(tf.Sign))
         goto end_func_choose
 next_func:
     }
     // loop not end normally
-    panic(fmt.Sprintf("%T %T `%s` not implemented!", env.stack.Get(1), env.stack.Get(0), op.Name))
+    panic(fmt.Sprintf("%T %T `%s` not implemented!", env.stack.Get(0), env.stack.Get(1), op.Name))
 
 end_func_choose:
-    //fmt.Println("Call.parsed_func:")// <<<<
-    //fmt.Println("Name:", op.Name)
-    //fmt.Println("Arity:", func_arity)
-    //fmt.Println("Signature:", op.Funcs[func_no].Sign)
-    //fmt.Println("Wrapped:", op.Funcs[func_no].Option & 0x10 > 1)
-    //println()
-    //fmt.Println("Environ:", x)// >>>>
-
     // Prepare the arguements; switch if needed
     op_func := op.Funcs[func_no]
     wrapped := (op_func.Option & 0x10) > 0
@@ -581,8 +626,6 @@ end_func_choose:
 
     // Calling the function
     result := op_func.Func(env, args)
-    //fmt.Println("Result:", result)
-    //env.stack.Clear()
     if wrapped {
         env.stack.Pusha(result)
     }
@@ -652,14 +695,12 @@ func parse(code *Parser, withbrace bool) *Block {
     }
 }
 
-func parseNumber(code *Parser) *Op {
+func parseNumber(code *Parser, nega bool) *Op {
     var num_str []rune       // String repr for the result number
     float := false
 
-    if c, _ := code.ReadRune(); c == '-' {
+    if nega {
         num_str = append(num_str, '-')
-    } else {
-        code.UnreadRune()
     }
 
     for c, err := code.ReadRune(); err == nil; c, err = code.ReadRune() {
@@ -696,7 +737,7 @@ func parseOp(code *Parser) *Op {
 
     if char >= '0' && char <= '9' {
         code.UnreadRune()
-        return parseNumber(code)
+        return parseNumber(code, false)
     }
 
     if char >= 'A' && char <= 'Z' {
@@ -736,8 +777,7 @@ func parseOp(code *Parser) *Op {
     case '-':
         if next, _ := code.ReadRune(); next >= '0' && next <= '9' {     // Check if next is digit
             code.UnreadRune()
-            code.UnreadRune()
-            return parseNumber(code)
+            return parseNumber(code, true)
         }
         code.UnreadRune()       // Spit out the "possible digit"
         return findOp("-")
@@ -747,23 +787,8 @@ func parseOp(code *Parser) *Op {
     }
 }
 //>>>>
-// Variables//<<<<
-var VARS []interface{}
-
-func getVar(c rune) interface{} {
-    if c >= 'A' && c <= 'Z' {
-        return VARS[c - 'A']
-    }
-    panic("Invalid variable name")
-}
-
-func InitVars() {
-    for i := 0; i <= 10; i ++ {
-        VARS = append(VARS, 10 + i)
-    }
-    VARS = append(VARS, wrapa([]rune{}, []rune{}, []rune{'\n'}, []rune{}, math.Pi, []rune{}, []rune{}, []rune{' '}, 0, 0, 0, -1, 1, 2, 3)...)
-    //                        L   M    N    O   P        Q   R    S   T  U  V  W   X  Y  Z
-
+// Functions //<<<<
+func InitFuncs() {
     // Note:
     // 1. The return value in the wrapped functions must be wraps()'ed;
     // 2. For non-wrapping functions, the `x` is actually the stack in `env`;
@@ -771,7 +796,79 @@ func InitVars() {
     //    discarded;
     // 4. Sometimes a condition would be put in front of the others because checking the type
     //    first would substract that situation from another situation.
+    addOp(&Op{"!",// <<<<
+    []TypedFunc{
+        // Logical NOT
+        {"a",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            return wraps(to_i(! to_bool(x.Get1())))
+        }},
+    }})// >>>>
+    addOp(&Op{"#",// <<<<
+    []TypedFunc{
+        // Numeric power
+        {"nn",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            res := math.Pow(to_d(a), to_d(b))
+            if res == to_d(to_i(res)) && ! any_double(a, b) {
+                return wraps(to_i(res))
+            }
+            return wraps(res)
+        }},
 
+        // Find index
+        {"lv",
+        0x11,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            al := to_l(a)
+            bl := wrapa()
+            if is_l(b) {
+                bl = to_l(b)
+            } else {
+                bl = wrapa(b)
+            }
+            return wraps(find(al, bl))
+        }},
+
+        {"lb",
+        0x01,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Pop2()
+            al := to_l(a)
+            bb := to_b(b)
+            for i := 0; i < len(al); i ++ {
+                x.Push(al[i])
+                bb.Run(env)
+                if to_bool(x.Pop()) {
+                    x.Push(i)
+                    return nil
+                }
+            }
+            x.Push(-1)
+            return nil
+        }},
+    }})// >>>>
+    addOp(&Op{"$",// <<<<
+    []TypedFunc{
+        // Copy from stack
+        {"p",
+        0x00,
+        func(env * Environ, x * Stack) *Stack {
+            ind := to_i(x.Pop())
+            if ind > 0 {
+                x.Push(x.Get(ind))
+            } else {
+                x.Push(x.Get(x.Size() + ind))
+            }
+            return nil
+        }},
+        // TODO Sort
+        // TODO Sort by expression
+    }})// >>>>
     addOp(&Op{"+",// <<<<
     []TypedFunc{
         // Numeric addition
@@ -1111,22 +1208,44 @@ next:
 // >>>>
 }
 //>>>>
+// Helper functions// <<<<
 func preproc(l []interface{}) (p []int) {
     subl := len(l)
     p = append(p, -1)
     for i, n := 1, 0; i < subl; i ++ {
-        if l[i] == l[n] {
+        if equals(l[i], l[n]) {
             p = append(p, p[n])
         } else {
             p = append(p, n)
             n = p[n]
-            for n >= 0 && ! (l[i] == l[n]) {
+            for n >= 0 && ! equals(l[i], l[n]) {
                 n = p[n]
             }
         }
         n ++
     }
     return
+}
+
+func equals(a, b interface{}) bool {
+    if ! (type_of(a) == type_of(b)) {
+        return false
+    }
+
+    if is_l(a) {
+        al, bl := to_l(a), to_l(b)
+        if len(al) != len(bl) {
+            return false
+        }
+        for i := 0; i < len(al); i ++ {
+            if ! equals(al[i], bl[i]) {
+                return false
+            }
+        }
+        return true
+    }
+
+    return a == b
 }
 
 func split(s, sub []interface{}, empty bool) []interface{} {
@@ -1138,7 +1257,7 @@ func split(s, sub []interface{}, empty bool) []interface{} {
     l := make([]interface{}, 0)
     x := 0
     for i, m := 0, 0; i < sl; i ++ {
-        for m >= 0 && ! (sub[m] == s[i]) {
+        for m >= 0 && ! equals(sub[m], s[i]) {
             m = p[m]
         }
         if m == max {
@@ -1158,9 +1277,35 @@ func split(s, sub []interface{}, empty bool) []interface{} {
     return l
 }
 
+func find(s, sub []interface{}) int {
+    fmt.Printf("find(%v, %v)\n", s, sub)
+    p := preproc(sub)
+    sl := len(s)
+    max := len(sub) - 1
+
+    for i, m := 0, 0; i < sl; i ++ {
+        for m >= 0 && ! equals(sub[m], s[i]) {
+            m = p[m]
+        }
+        if m == max {
+            return i - m
+        }
+        m ++
+    }
+    return -1
+}
+// >>>>
 func main() {// <<<<
-    InitVars()
+    signals := make(chan os.Signal, 1)
+    signal.Notify(signals, syscall.SIGINT)
+    go func() {
+        select {
+        case <-signals:
+            exit()
+        }
+    }()
     env := NewEnviron()
+    InitFuncs()
 
     var block *Block
     input := bufio.NewScanner(os.Stdin)
@@ -1179,5 +1324,12 @@ func main() {// <<<<
 next:
         fmt.Print(">>> ")
     }
-}// >>>>
+    exit()
+}
+
+func exit() {
+    fmt.Println("\nHappy jaming! " + ":)")//string(0x1f601))
+    os.Exit(0)
+}
+// >>>>
 // vim: set foldmethod=marker foldmarker=<<<<,>>>>
