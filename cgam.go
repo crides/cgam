@@ -62,6 +62,11 @@ func (x * Stack) Pop() (a interface{}) {
     return
 }
 
+func (x * Stack) Pop2() (a, b interface{}) {
+    b, a = x.Pop(), x.Pop()
+    return
+}
+
 func (x * Stack) Get(ind int) interface{} {
     return (*x)[ind]
 }
@@ -98,6 +103,15 @@ func (x * Stack) Size() int {
 func (x * Stack) Switch(a, b int) {
     (*x)[a], (*x)[b] = (*x)[b], (*x)[a]
 }
+
+func (x * Stack) Reverse() {    // Reverse in-place
+    i, j := 0, x.Size() - 1
+    for i <= j {
+        x.Switch(i, j)
+        i ++
+        j --
+    }
+}
 // >>>>
 type Environ struct {// <<<<
     stack   *Stack
@@ -131,7 +145,9 @@ func (env * Environ) PopMark() {
     fmt.Println("Mark:", mark)
     fmt.Println("Length:", length)
     fmt.Println("End:", end)
-    *env.stack = append(wrapa((*env.stack)[:end]), (*env.stack)[end:]...)
+    wrapped := NewStack((*env.stack)[:end])
+    wrapped.Reverse()       // For compat
+    *env.stack = append(wrapa([]interface{}(*wrapped)), (*env.stack)[end:]...)
 }
 // >>>>
 // Type predicates//<<<<
@@ -307,7 +323,7 @@ func to_l(a interface{}) []interface{} {
         }
         return as
     default:
-        panic("Not a list!")
+        panic(fmt.Sprintf("Cannot convert %s to list!", type_of(a)))
     }
 }
 
@@ -350,9 +366,6 @@ func to_s(a interface{}) string {
     case fmt.Stringer:
         return b.String()
     default:
-        if is_s(a) {
-            return to_s(a)
-        }
         return fmt.Sprint(b)
     }
 }
@@ -751,7 +764,14 @@ func InitVars() {
     VARS = append(VARS, wrapa([]rune{}, []rune{}, []rune{'\n'}, []rune{}, math.Pi, []rune{}, []rune{}, []rune{' '}, 0, 0, 0, -1, 1, 2, 3)...)
     //                        L   M    N    O   P        Q   R    S   T  U  V  W   X  Y  Z
 
-    // Note: the return value in the wrapped functions must be wrapa()'ed
+    // Note:
+    // 1. The return value in the wrapped functions must be wraps()'ed;
+    // 2. For non-wrapping functions, the `x` is actually the stack in `env`;
+    // 3. For non-wrapping functions, the return value can be `nil`, because it is actually
+    //    discarded;
+    // 4. Sometimes a condition would be put in front of the others because checking the type
+    //    first would substract that situation from another situation.
+
     addOp(&Op{"+",// <<<<
     []TypedFunc{
         // Numeric addition
@@ -908,7 +928,8 @@ next:
         {"bi",
         0x01,
         func(env * Environ, x * Stack) *Stack {
-            b, a := x.Pop(), x.Pop()
+            //b, a := x.Pop(), x.Pop()
+            a, b := x.Pop2()
             for i := 0; int(i) < to_i(b); i ++ {
                 to_b(a).Run(env)
             }
@@ -990,6 +1011,74 @@ next:
             }
             return wraps(to_i(a) / to_i(b))
         }},
+
+        // Split by length
+        {"ln",
+        0x11,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            n := to_i(b)
+            if n <= 0 {
+                panic("Invalid size for spliting!")
+            }
+            al := to_l(a)
+            m := len(al)
+            res := wrapa()
+            end := 0
+            for i := 0; i < m; i += n {
+                if i + n < m {
+                    end = i + n
+                } else {
+                    end = m
+                }
+                res = append(res, al[i:end])
+            }
+            return wraps(res)
+        }},
+
+        // Split by sep
+        {"lv",
+        0x11,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            if is_l(b) {
+                return wraps(split(to_l(a), to_l(b), true))
+            } else {
+                return wraps(split(to_l(a), wrapa(b), true))
+            }
+        }},
+
+        // Foreach
+        {"bv",
+        0x01,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Pop2()
+            ab := to_b(a)
+            if is_c(b) || is_n(b) {
+                bn := to_i(b)
+                for i := 0; i < bn; i ++ {
+                    x.Push(i)
+                    ab.Run(env)
+                }
+            } else {
+                bl := to_l(b)
+                for _, i := range bl {
+                    x.Push(i)
+                    ab.Run(env)
+                }
+            }
+            return nil
+        }},
+    }})
+// >>>>
+    addOp(&Op{"_",// <<<<
+    []TypedFunc{
+        {"",
+        0x00,
+        func(env * Environ, x * Stack) *Stack {
+            x.Push(x.Get(0))
+            return nil
+        }},
     }})
 // >>>>
     addOp(&Op{"[",// <<<<
@@ -1022,6 +1111,53 @@ next:
 // >>>>
 }
 //>>>>
+func preproc(l []interface{}) (p []int) {
+    subl := len(l)
+    p = append(p, -1)
+    for i, n := 1, 0; i < subl; i ++ {
+        if l[i] == l[n] {
+            p = append(p, p[n])
+        } else {
+            p = append(p, n)
+            n = p[n]
+            for n >= 0 && ! (l[i] == l[n]) {
+                n = p[n]
+            }
+        }
+        n ++
+    }
+    return
+}
+
+func split(s, sub []interface{}, empty bool) []interface{} {
+    p := preproc(sub)
+    fmt.Println("preproc(sub) ->", p)
+    sl := len(s)
+    max := len(sub) - 1
+
+    l := make([]interface{}, 0)
+    x := 0
+    for i, m := 0, 0; i < sl; i ++ {
+        for m >= 0 && ! (sub[m] == s[i]) {
+            m = p[m]
+        }
+        if m == max {
+            t := s[x:i-m]
+            if empty || ! (len(t) == 0) {
+                l = append(l, t)
+            }
+            x = i + 1
+            m = -1
+        }
+        m ++
+    }
+    t := s[x:len(s)]
+    if empty || ! (len(t) == 0) {
+        l = append(l, t)
+    }
+    return l
+}
+
 func main() {// <<<<
     InitVars()
     env := NewEnviron()
@@ -1044,4 +1180,4 @@ next:
         fmt.Print(">>> ")
     }
 }// >>>>
-// vim: set foldmethod=marker; set foldmarker=<<<<,>>>>
+// vim: set foldmethod=marker foldmarker=<<<<,>>>>
