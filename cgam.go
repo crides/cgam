@@ -14,8 +14,12 @@ import (
     "strings"
     "syscall"
 )
-// TODO 
-// 1. Implement signal catching, and pretty `Bye!`'s;
+// TODO `:` (colon)
+// TODO `.` (dot)
+// TODO reset env.marks if needed
+// TODO The math.Remainder function is a bit weird
+// Sort by key TODO Test
+// Find index that satisfy block TODO Test
 // The memo for recursive functions (`y`)// <<<<
 type Memo struct {
     block   *Block
@@ -60,11 +64,17 @@ func (x * Stack) Pusha(as *Stack) {
 
 func (x * Stack) Pop() (a interface{}) {
     a, *x = (*x)[0], (*x)[1:]
+    // TODO reset env.marks if needed
     return
 }
 
 func (x * Stack) Pop2() (a, b interface{}) {
     b, a = x.Pop(), x.Pop()
+    return
+}
+
+func (x * Stack) Pop3() (a, b, c interface{}) {
+    c, b, a = x.Pop(), x.Pop(), x.Pop()
     return
 }
 
@@ -78,6 +88,10 @@ func (x * Stack) Get1() interface{} {
 
 func (x * Stack) Get2() (interface{}, interface{}) {
     return (*x)[0], (*x)[1]
+}
+
+func (x * Stack) Get3() (interface{}, interface{}, interface{}) {
+    return (*x)[0], (*x)[1], (*x)[2]
 }
 
 func (x * Stack) Cut(a, b int) *Stack {
@@ -143,18 +157,21 @@ func (env * Environ) GetMemo() *Memo {
 
 func (env * Environ) Mark() {
     env.marks = append(env.marks, env.stack.Size())
+    fmt.Println("Marks:", env.marks)
 }
 
 func (env * Environ) PopMark() {
     mark := 0
-    if len(env.marks) > 0 {
-        mark, env.marks = env.marks[0], env.marks[1:]
+    size := len(env.marks)
+    if size > 0 {
+        mark, env.marks = env.marks[size - 1], env.marks[:size - 1]
     }
     length := env.stack.Size()
     end := length - mark
     wrapped := NewStack((*env.stack)[:end])
     wrapped.Reverse()       // For compat
     *env.stack = append(wrapa([]interface{}(*wrapped)), (*env.stack)[end:]...)
+    fmt.Println("Marks:", env.marks)
 }
 
 // Variables
@@ -415,6 +432,15 @@ func to_v(a interface{}) string {       // To value string
         return fmt.Sprintf("%q", string(b))
     case rune:
         return "'" + string(b)
+    case []interface{}:
+        s := "["
+        for _, i := range b {
+            s += to_v(i) + " "
+        }
+        if len(s) == 1 {
+            return "[]"
+        }
+        return s[:len(s) - 1] + "]"
     case *Block:
         return b.String()
     default:
@@ -428,13 +454,13 @@ func to_v(a interface{}) string {       // To value string
 func to_bool(a interface{}) bool {
     switch b := a.(type) {
     case int, rune:
-        return ! (b == 0)
+        return b != 0
     case float64:
-        return ! (b == 0)
+        return b != 0
     case []interface{}:
-        return ! (len(b) == 0)
+        return len(b) != 0
     case []rune:
-        return ! (len(b) == 0)
+        return len(b) != 0
     default:
         not_convertible(a, "bool")
     }
@@ -569,7 +595,7 @@ func (op * Op) Call(env * Environ) {
     // For simplicity, the top of the stack is args[0]
     // But the arguments passed to Op.Run() is in the reverse direction
     //           -----------
-    // args[0]    Environ top     c
+    // args[0]    Environ top   c
     //           -----------
     // args[1]       ...        b
     //           -----------
@@ -855,7 +881,7 @@ func InitFuncs() {
     addOp(&Op{"$",// <<<<
     []TypedFunc{
         // Copy from stack
-        {"p",
+        {"n",
         0x00,
         func(env * Environ, x * Stack) *Stack {
             ind := to_i(x.Pop())
@@ -1061,7 +1087,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{")",// <<<<
     []TypedFunc{
-        // Decrement
+        // Increment
         {"p",
         0x10,
         func(env * Environ, x * Stack) *Stack {
@@ -1078,7 +1104,7 @@ func InitFuncs() {
             return wraps(res)
         }},
 
-        // Uncons from left
+        // Uncons from right
         {"l",
         0x10,
         func(env * Environ, x * Stack) *Stack {
@@ -1247,6 +1273,78 @@ func InitFuncs() {
         }},
     }})
 // >>>>
+    addOp(&Op{",",// <<<<
+    []TypedFunc{
+        // Range(stop)
+        {"n",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            n := to_i(x.Get1())
+            if n < 0 {
+                panic("Invalid size for range!")
+            }
+            res := wrapa()
+            for i := 0; i < n; i ++ {
+                res = append(res, i)
+            }
+            return wraps(res)
+        }},
+
+        // Range for chars
+        {"c",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            n := to_i(x.Get1())
+            res := wrapa()
+            for i := 0; i < n; i ++ {
+                res = append(res, to_c(i))
+            }
+            return wraps(res)
+        }},
+
+        // Length
+        {"l",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            l := to_l(x.Get1())
+            return wraps(len(l))
+        }},
+
+        // Filter
+        {"lb",
+        0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Pop2()
+            al, bb := to_l(a), to_b(b)
+            res := wrapa()
+            for _, i := range al {
+                x.Push(i)
+                bb.Run(env)
+                if to_bool(x.Pop()) {
+                    res = append(res, i)
+                }
+            }
+            x.Push(res)
+            return nil
+        }},
+
+        {"nb",
+        0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Pop2()
+            ai, bb := to_i(a), to_b(b)
+            res := wrapa()
+            for i := 0; i < ai; i ++ {
+                x.Push(i)
+                bb.Run(env)
+                if to_bool(x.Pop()) {
+                    res = append(res, i)
+                }
+            }
+            x.Push(res)
+            return nil
+        }},
+    }})// >>>>
     addOp(&Op{"-",// <<<<
     []TypedFunc{
         // Numeric minus
@@ -1313,6 +1411,7 @@ func InitFuncs() {
         }},
     }})
 // >>>>
+// TODO `.` (dot)
     addOp(&Op{"/",// <<<<
     []TypedFunc{
         // Numberic division
@@ -1385,16 +1484,118 @@ func InitFuncs() {
         }},
     }})
 // >>>>
-    addOp(&Op{"_",// <<<<
+// TODO `:` (colon)
+    addOp(&Op{"`",  // From `;` to ```// <<<<
     []TypedFunc{
-        {"",
-        0x00,
+        {"a",
+        0x10,
         func(env * Environ, x * Stack) *Stack {
-            x.Push(x.Get(0))
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"<",// <<<<
+    []TypedFunc{
+        // Slice before
+        {"li",
+        0x11,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            al, bi := to_l(a), to_i(b)
+            return wraps(al[:adjust_ind(bi, len(al))])
+        }},
+
+        // Compare (Less than)
+        {"vv",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            return wraps(to_i(comp(a, b) < 0))
+        }},
+    }})// >>>>
+    addOp(&Op{"=",// <<<<
+    []TypedFunc{
+        // Get from list
+        {"li",
+        0x11,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            al, bi := to_l(a), to_i(b)
+            return wraps(al[adjust_indm(bi, len(al))])
+        }},
+
+        // Compare (Equals)
+        {"vv",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            return wraps(to_i(comp(a, b) == 0))
+        }},
+
+        // Find value satisfy condition
+        {"lb",
+        0x01,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Pop2()
+            al, bb := to_l(a), to_b(b)
+            for _, i := range al {
+                x.Push(i)
+                bb.Run(env)
+                if to_bool(x.Pop()) {
+                    x.Push(i)
+                    return nil
+                }
+            }
             return nil
         }},
-    }})
-// >>>>
+    }})// >>>>
+    addOp(&Op{">",// <<<<
+    []TypedFunc{
+        // Slice after
+        {"li",
+        0x11,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            al, bi := to_l(a), to_i(b)
+            return wraps(al[adjust_ind(bi, len(al)):])
+        }},
+
+        // Compare (Greater than)
+        {"vv",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            return wraps(to_i(comp(a, b) > 0))
+        }},
+    }})// >>>>
+    addOp(&Op{"?",// <<<<
+    []TypedFunc{
+        {"vaa",
+        0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a, b, c := x.Pop3()
+            var conseq interface{}
+            if to_bool(a) {
+                conseq = b
+            } else {
+                conseq = c
+            }
+            if is_b(conseq) {
+                to_b(conseq).Run(env)
+            } else {
+                x.Push(conseq)
+            }
+            return nil
+        }},
+    }})// >>>>
+    addOp(&Op{"@",// <<<<
+    []TypedFunc{
+        {"aaa",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b, c := x.Get3()
+            return wraps(a, c, b)
+        }},
+    }})// >>>>
     addOp(&Op{"[",// <<<<
     []TypedFunc{
         {"",
@@ -1404,6 +1605,15 @@ func InitFuncs() {
             return wraps()
         }}}})
 // >>>>
+    addOp(&Op{"\\",// <<<<
+    []TypedFunc{
+        {"aa",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            return wraps(b, a)
+        }},
+    }})// >>>>
     addOp(&Op{"]",// <<<<
     []TypedFunc{
         {"",
@@ -1412,6 +1622,16 @@ func InitFuncs() {
             env.PopMark()
             return wraps()
         }}}})
+// >>>>
+    addOp(&Op{"_",// <<<<
+    []TypedFunc{
+        {"",
+        0x00,
+        func(env * Environ, x * Stack) *Stack {
+            x.Push(x.Get(0))
+            return nil
+        }},
+    }})
 // >>>>
     addOp(&Op{"t",// <<<<
     []TypedFunc{{
@@ -1539,17 +1759,23 @@ func comp(a, b interface{}) int {
     if is_l(a) && is_l(b) {
         al, bl := to_l(a), to_l(b)
         as, bs := len(al), len(bl)
+        size := 0
+        if as < bs {
+            size = as
+        } else {
+            size = bs
+        }
+        for i := 0; i < size; i ++ {
+            res := comp(al[i], bl[i])
+            if res != 0 {
+                return res
+            }
+        }
         switch {
         case as < bs:
             return -1
         case as > bs:
             return 1
-        }
-        for i := 0; i < as; i ++ {
-            res := comp(al[i], bl[i])
-            if res != 0 {
-                return res
-            }
         }
         return 0
     } else if (is_c(a) || is_n(a)) && (is_c(b) || is_n(b)) {
@@ -1566,6 +1792,26 @@ func comp(a, b interface{}) int {
     panic(fmt.Sprintf("Uncomparable types!: %T and %T", a, b))
 }
 
+func adjust_ind(ind, size int) int {
+    if ind < 0 {
+        ind += size
+        if ind < 0 {
+            ind = 0
+        }
+    } else if ind > size {
+        ind = size
+    }
+    return ind
+}
+
+func adjust_indm(ind, size int) int {
+    ind %= size
+    fmt.Println("adjust_indm: ind % size:", ind)
+    if ind < 0 {
+        ind += size
+    }
+    return ind
+}
 // >>>>
 func main() {// <<<<
     signals := make(chan os.Signal, 1)
