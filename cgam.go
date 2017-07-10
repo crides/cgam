@@ -18,8 +18,6 @@ import (
 // TODO `.` (dot)
 // TODO reset env.marks if needed
 // TODO The math.Remainder function is a bit weird
-// Sort by key TODO Test
-// Find index that satisfy block TODO Test
 // The memo for recursive functions (`y`)// <<<<
 type Memo struct {
     block   *Block
@@ -155,9 +153,37 @@ func (env * Environ) GetMemo() *Memo {
     return env.memo
 }
 
+func (env * Environ) Pop() (a interface{}) {    // Wraps the Stack.pop() method to resize the env.marks.
+    a = env.stack.Pop()
+    size := env.stack.Size()
+    for i, m := range env.marks {
+        if m > size {
+            env.marks[i] = size
+        }
+    }
+    return
+}
+
+func (env * Environ) Pop2() (a, b interface{}) {
+    b, a = env.Pop(), env.Pop()
+    return
+}
+
+func (env * Environ) Pop3() (a, b, c interface{}) {
+    c, b, a = env.Pop(), env.Pop(), env.Pop()
+    return
+}
+
+func (env * Environ) Push(a interface{}) {
+    env.stack.Push(a)
+}
+
+func (env * Environ) Pusha(as *Stack) {
+    env.stack.Pusha(as)
+}
+
 func (env * Environ) Mark() {
     env.marks = append(env.marks, env.stack.Size())
-    fmt.Println("Marks:", env.marks)
 }
 
 func (env * Environ) PopMark() {
@@ -171,7 +197,6 @@ func (env * Environ) PopMark() {
     wrapped := NewStack((*env.stack)[:end])
     wrapped.Reverse()       // For compat
     *env.stack = append(wrapa([]interface{}(*wrapped)), (*env.stack)[end:]...)
-    fmt.Println("Marks:", env.marks)
 }
 
 // Variables
@@ -635,7 +660,7 @@ end_func_choose:
     var args *Stack
     if wrapped {
         for i := 0; i < int(func_arity); i ++ {
-            raw_args = append(wrapa(env.stack.Pop()), raw_args...)
+            raw_args = append(wrapa(env.Pop()), raw_args...)
         }
         args = NewStack(raw_args)
         if match == 2 {      // Only do a switch if it's a special match
@@ -651,7 +676,7 @@ end_func_choose:
     // Calling the function
     result := op_func.Func(env, args)
     if wrapped {
-        env.stack.Pusha(result)
+        env.Pusha(result)
     }
 }
 //>>>>
@@ -859,17 +884,16 @@ func InitFuncs() {
             return wraps(find(al, bl))
         }},
 
-        // Find index that satisfy block TODO Test
+        // Find index that satisfy block
         {"lb",
         0x01,
         func(env * Environ, x * Stack) *Stack {
-            a, b := x.Pop2()
-            al := to_l(a)
-            bb := to_b(b)
+            a, b := env.Pop2()
+            al, bb := to_l(a), to_b(b)
             for i := 0; i < len(al); i ++ {
                 x.Push(al[i])
                 bb.Run(env)
-                if to_bool(x.Pop()) {
+                if to_bool(env.Pop()) {
                     x.Push(i)
                     return nil
                 }
@@ -884,7 +908,7 @@ func InitFuncs() {
         {"n",
         0x00,
         func(env * Environ, x * Stack) *Stack {
-            ind := to_i(x.Pop())
+            ind := to_i(env.Pop())
             if ind > 0 {
                 x.Push(x.Get(ind))
             } else {
@@ -903,17 +927,17 @@ func InitFuncs() {
             return wraps(s.arr)
         }},
 
-        // Sort by key TODO Test
+        // Sort by key
         {"lb",
         0x00,
         func(env * Environ, x * Stack) *Stack {
-            a, b := x.Pop2()
+            a, b := env.Pop2()
             al, bb := to_l(a), to_b(b)
 
             s := NewSorter(al, func(a interface{}) interface{} {
                 x.Push(a)
                 bb.Run(env)
-                return x.Pop()
+                return env.Pop()
             })
             sort.Stable(s)
             x.Push(s.arr)
@@ -983,7 +1007,7 @@ func InitFuncs() {
         {"bv",
         0x01,
         func(env * Environ, x * Stack) *Stack {
-            a, b := x.Pop2()
+            a, b := env.Pop2()
             env.Mark()
             ab := to_b(a)
             if is_c(b) || is_n(b) {
@@ -1049,7 +1073,7 @@ func InitFuncs() {
         {"vb",
         0x00,
         func(env * Environ, x * Stack) *Stack {
-            a, b := x.Pop2()
+            a, b := env.Pop2()
             if to_bool(a) {
                 to_b(b).Run(env)
             }
@@ -1148,8 +1172,8 @@ func InitFuncs() {
         {"bi",
         0x01,
         func(env * Environ, x * Stack) *Stack {
-            //b, a := x.Pop(), x.Pop()
-            a, b := x.Pop2()
+            //b, a := env.Pop(), env.Pop()
+            a, b := env.Pop2()
             for i := 0; int(i) < to_i(b); i ++ {
                 to_b(a).Run(env)
             }
@@ -1206,7 +1230,7 @@ func InitFuncs() {
         {"lb",
         0x01,
         func(env * Environ, x * Stack) *Stack {
-            b, a := x.Pop(), x.Pop()
+            a, b := env.Pop2()
             al, bb := to_l(a), to_b(b)
             if len(al) > 0 {
                 x.Push(al[0])
@@ -1314,13 +1338,13 @@ func InitFuncs() {
         {"lb",
         0x00,
         func(env * Environ, x * Stack) *Stack {
-            a, b := x.Pop2()
+            a, b := env.Pop2()
             al, bb := to_l(a), to_b(b)
             res := wrapa()
             for _, i := range al {
                 x.Push(i)
                 bb.Run(env)
-                if to_bool(x.Pop()) {
+                if to_bool(env.Pop()) {
                     res = append(res, i)
                 }
             }
@@ -1331,13 +1355,13 @@ func InitFuncs() {
         {"nb",
         0x00,
         func(env * Environ, x * Stack) *Stack {
-            a, b := x.Pop2()
+            a, b := env.Pop2()
             ai, bb := to_i(a), to_b(b)
             res := wrapa()
             for i := 0; i < ai; i ++ {
                 x.Push(i)
                 bb.Run(env)
-                if to_bool(x.Pop()) {
+                if to_bool(env.Pop()) {
                     res = append(res, i)
                 }
             }
@@ -1465,7 +1489,7 @@ func InitFuncs() {
         {"bv",
         0x01,
         func(env * Environ, x * Stack) *Stack {
-            a, b := x.Pop2()
+            a, b := env.Pop2()
             ab := to_b(a)
             if is_c(b) || is_n(b) {
                 bn := to_i(b)
@@ -1535,12 +1559,12 @@ func InitFuncs() {
         {"lb",
         0x01,
         func(env * Environ, x * Stack) *Stack {
-            a, b := x.Pop2()
+            a, b := env.Pop2()
             al, bb := to_l(a), to_b(b)
             for _, i := range al {
                 x.Push(i)
                 bb.Run(env)
-                if to_bool(x.Pop()) {
+                if to_bool(env.Pop()) {
                     x.Push(i)
                     return nil
                 }
@@ -1572,7 +1596,7 @@ func InitFuncs() {
         {"vaa",
         0x00,
         func(env * Environ, x * Stack) *Stack {
-            a, b, c := x.Pop3()
+            a, b, c := env.Pop3()
             var conseq interface{}
             if to_bool(a) {
                 conseq = b
@@ -1611,7 +1635,7 @@ func InitFuncs() {
         0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
-            return wraps(b, a)
+            return wraps(a, b)
         }},
     }})// >>>>
     addOp(&Op{"]",// <<<<
@@ -1623,6 +1647,60 @@ func InitFuncs() {
             return wraps()
         }}}})
 // >>>>
+    addOp(&Op{"^",// <<<<
+    []TypedFunc{
+        // Bitwise XOR
+        {"ii",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            return wraps(to_i(a) ^ to_i(b))
+        }},
+
+        {"cc",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            return wraps(to_i(a) ^ to_i(b))
+        }},
+
+        {"ic",
+        0x11,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            return wraps(to_c(to_i(a) ^ to_i(b)))
+        }},
+
+        // Symmetric set diff
+        {"vv",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            al, bl := wrapa(), wrapa()
+            res := wrapa()
+            if is_l(a) {
+                al = to_l(a)
+            } else {
+                al = wrapa(a)
+            }
+            if is_l(b) {
+                bl = to_l(b)
+            } else {
+                bl = wrapa(b)
+            }
+            for _, i := range al {
+                if find(bl, wrapa(i)) == -1 && find(res, wrapa(i)) == -1 {
+                    res = append(res, i)
+                }
+            }
+            for _, i := range bl {
+                if find(al, wrapa(i)) == -1 && find(res, wrapa(i)) == -1 {
+                    res = append(res, i)
+                }
+            }
+            return wraps(res)
+        }},
+    }})// >>>>
     addOp(&Op{"_",// <<<<
     []TypedFunc{
         {"",
@@ -1633,6 +1711,91 @@ func InitFuncs() {
         }},
     }})
 // >>>>
+    addOp(&Op{"|",// <<<<
+    []TypedFunc{
+        // Bitwise OR
+        {"ii",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            return wraps(to_i(a) | to_i(b))
+        }},
+
+        {"ic",
+        0x11,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            return wraps(to_c(to_i(a) | to_i(b)))
+        }},
+
+        // Set union
+        {"vv",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            al, bl := wrapa(), wrapa()
+            res := wrapa()
+            if is_l(a) {
+                al = to_l(a)
+            } else {
+                al = wrapa(a)
+            }
+            if is_l(b) {
+                bl = to_l(b)
+            } else {
+                bl = wrapa(b)
+            }
+            for _, i := range al {
+                if find(res, wrapa(i)) == -1 {
+                    res = append(res, i)
+                }
+            }
+            for _, i := range bl {
+                if find(res, wrapa(i)) == -1 {
+                    res = append(res, i)
+                }
+            }
+            return wraps(res)
+        }},
+
+        // If-else
+        {"vb",
+        0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := env.Pop2()
+            if ! to_bool(a) {
+                to_b(b).Run(env)
+            }
+            return nil
+        }},
+    }})// >>>>
+    addOp(&Op{"~",// <<<<
+    []TypedFunc{
+        // Bitwise NOT
+        {"i",
+        0x10,
+        func(env * Environ, x * Stack) *Stack {
+            return wraps(^to_i(x.Get1()))
+        }},
+
+        // Evaluate block/string/char, or dump list
+        {"a",
+        0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a := env.Pop()
+            switch {
+            case is_b(a):
+                to_b(a).Run(env)
+            case is_s(a) || is_c(a):
+                parse(NewParser(strings.NewReader(to_s(a))), false).Run(env)
+            case is_l(a):
+                unwrapped := NewStack(to_l(a))
+                unwrapped.Reverse()
+                env.Pusha(unwrapped)
+            }
+            return nil
+        }},
+    }})// >>>>
     addOp(&Op{"t",// <<<<
     []TypedFunc{{
         "a",
