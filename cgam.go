@@ -2,8 +2,8 @@ package main
 
 import (
     "bufio"
+    "errors"
     "fmt"
-    "io"
     "math"
     "os"
     "os/signal"
@@ -11,12 +11,8 @@ import (
     "regexp"
     "sort"
     "strconv"
-    "strings"
     "syscall"
 )
-// TODO `:` (colon)
-// TODO `.` (dot)
-// TODO reset env.marks if needed
 // TODO The math.Remainder function is a bit weird
 // The memo for recursive functions (`y`)// <<<<
 type Memo struct {
@@ -63,16 +59,6 @@ func (x * Stack) Pusha(as *Stack) {
 func (x * Stack) Pop() (a interface{}) {
     a, *x = (*x)[0], (*x)[1:]
     // TODO reset env.marks if needed
-    return
-}
-
-func (x * Stack) Pop2() (a, b interface{}) {
-    b, a = x.Pop(), x.Pop()
-    return
-}
-
-func (x * Stack) Pop3() (a, b, c interface{}) {
-    c, b, a = x.Pop(), x.Pop(), x.Pop()
     return
 }
 
@@ -128,11 +114,12 @@ func (x * Stack) Reverse() {    // Reverse in-place
 // >>>>
 // The environment// <<<<
 type Environ struct {
-    stack   *Stack
-    marks   []int
-    memo    *Memo
-    vars    []interface{}
-    args    []string
+    stack       *Stack
+    marks       []int
+    memo        *Memo
+    vars        []interface{}
+    longVars    map[string]interface{}
+    args        []string
 }
 
 func NewEnviron() *Environ {
@@ -140,6 +127,7 @@ func NewEnviron() *Environ {
                     make([]int, 0),
                     nil,
                     make([]interface{}, 0),
+                    make(map[string]interface{}),
                     os.Args[1:]}
     env.InitVars()
     return env
@@ -200,11 +188,28 @@ func (env * Environ) PopMark() {
 }
 
 // Variables
-func (env * Environ) getVar(c rune) interface{} {
-    if c >= 'A' && c <= 'Z' {
-        return env.vars[c - 'A']
+func (env * Environ) GetVar(s string) interface{} {
+    if len(s) == 1 {
+        if c := s[0]; is_upper(rune(c)) {
+            return env.vars[c - 'A']
+        }
+        panic("Invalid variable name")
     }
-    panic("Invalid variable name")
+    if a, ok := env.longVars[s]; ok {
+        return a
+    }
+    panic("Variable not defined!")
+}
+
+func (env * Environ) SetVar(s string, a interface{}) {
+    if len(s) == 1 {
+        if c := s[0]; is_upper(rune(c)) {
+            env.vars[c - 'A'] = a
+            return
+        }
+        panic("Invalid variable name")
+    }
+    env.longVars[s] = a
 }
 
 func (env * Environ) InitVars() {
@@ -234,7 +239,6 @@ func type_of(a interface{}) string {
     default:
         return "unknown"
     }
-    //return reflect.TypeOf(a).String()
 }
 
 func type_eq(a interface{}, typ rune) bool {
@@ -316,7 +320,7 @@ func is_l(a interface{}) bool {
 }
 
 func is_s(a interface{}) bool {
-    if _type_eq(a, "[]int32") {     //[]rune
+    if _type_eq(a, "[]int32") {
         return true
     }
 
@@ -495,7 +499,7 @@ func to_bool(a interface{}) bool {
 // Block//<<<<
 type Block struct {
     Ops     []*Op
-    Offsets [][2]int    //LineNum & Offset
+    Offsets [][2]int    // LineNum & Offset
 }
 
 func NewBlock(ops []*Op, offsets [][2]int) *Block {
@@ -507,8 +511,13 @@ func NewBlock(ops []*Op, offsets [][2]int) *Block {
 
 func (b * Block) Run(env * Environ) {
     for _, op := range b.Ops {
-        op.Call(env)
+        op.Run(env)
     }
+    defer func() {
+        if err := recover(); err != nil {
+            fmt.Println("\x1b[33mERROR\x1b[0m: Parser:", err)
+        }
+    }()
 }
 
 func (b * Block) String() string {
@@ -524,6 +533,20 @@ func (b * Block) String() string {
     return string(s)
 }
 //>>>>
+type Runner interface {// <<<<
+    Run(*Environ)
+    String() string
+}
+
+// A work around for the Op, Op1, Op2 and Op3 classes
+func (op * Op) HasArity(arity int) bool {
+    for _, tf := range op.Funcs {
+        if len(tf.Sign) == arity {
+            return true
+        }
+    }
+    return false
+}// >>>>
 // Operator//<<<<
 type TypedFunc struct {
     Sign    string        // Signature
@@ -560,36 +583,124 @@ func findOp(name string) *Op {
 
 func op_push(a interface{}) *Op {
     return &Op{to_v(a),
-        []TypedFunc{{
-            "",
+        []TypedFunc{
+            {"",
             0x10,
             func(env * Environ, x * Stack) *Stack {
                 return wraps(a)
-            }}}}
+            }},
+        }}
 }
 
-func op_pushVar(c rune) *Op {
-    return &Op{string(c),
-        []TypedFunc{{
-            "",
-            0x00,
-            func(env * Environ, x * Stack) *Stack {
-                a := env.getVar(c)
-                if ! is_b(a) {
-                    x.Push(a)
+func op_pushVar(s string) *Op {
+    real_var_name := s
+    if s[0] == '.' {
+        real_var_name = s[1:]
+    }
+    return &Op{s,
+    []TypedFunc{
+        {"",
+        0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a := env.GetVar(real_var_name)
+            if ! is_b(a) {
+                x.Push(a)
+            } else {
+                to_b(a).Run(env)
+            }
+            return nil
+        }},
+    }}
+}
+
+func op_setVar(s string) *Op {
+    real_var_name := s
+    if s[0] == '.' {
+        real_var_name = s[1:]
+    }
+    return &Op{":" + s,
+    []TypedFunc{
+        {"", 0x00,
+        func(env * Environ, x * Stack) *Stack {
+            env.SetVar(real_var_name, x.Get(0))
+            return nil
+        }},
+    }}
+}
+
+func op_vector(r Runner) *Op {
+    return &Op{"." + r.String(),
+    []TypedFunc{
+        {"ll", 0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := env.Pop2()
+            al, bl := to_l(a), to_l(b)
+            as, bs := len(al), len(bl)
+            size := int(math.Max(float64(as), float64(bs)))
+
+            env.Mark()
+            for i := 0; i < size; i ++ {
+                if i < as {
+                    env.Push(al[i])
+                    if i < bs {
+                        env.Push(bl[i])
+                        r.Run(env)
+                    }
                 } else {
-                    to_b(a).Run(env)
+                    env.Push(bl[i])
                 }
-                return nil
-            }}}}
+            }
+            env.PopMark()
+            return nil
+        }},
+    }}
 }
 
-func match_sign(tf TypedFunc, x * Stack) int {
+func op_map(op * Op) *Op {
+    return &Op{":" + op.String(),
+    []TypedFunc{
+        {"l", 0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a := env.Pop()
+            al := to_l(a)
+            env.Mark()
+            for _, i := range al {
+                env.Push(i)
+                op.Run(env)
+            }
+            env.PopMark()
+            return nil
+        }},
+    }}
+}
+
+func op_fold(op * Op) *Op {
+    return &Op{":" + op.String(),
+    []TypedFunc{
+        {"l", 0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a := env.Pop()
+            al := to_l(a)
+            env.Push(al[0])
+            for i := 1; i < len(al); i ++ {
+                env.Push(al[i])
+                op.Run(env)
+            }
+            return nil
+        }},
+    }}
+}
+
+func MatchSign(tf TypedFunc, x * Stack) int {
     // Return value:
+    // -1 not enough arguments
     // 0: not match
     // 1: matched
     // 2: special match (match if switched)
     arity := len(tf.Sign)
+    if x.Size() < arity {
+        return -1
+    }
     for i, typename := range tf.Sign {
         if ! type_eq(x.Get(arity - i - 1), typename) {
             goto try_switch
@@ -606,7 +717,7 @@ try_switch:
         var new_tf TypedFunc
         new_sign[sw_s], new_sign[sw_e] = new_sign[sw_e], new_sign[sw_s]
         new_tf.Sign = string(new_sign)
-        if match_sign(new_tf, x) > 0 {
+        if MatchSign(new_tf, x) > 0 {
             // A special match
             return 2
         }
@@ -615,7 +726,7 @@ try_switch:
     return 0
 }
 
-func (op * Op) Call(env * Environ) {
+func (op * Op) Run(env * Environ) {
     // Call functions// <<<<
     // For simplicity, the top of the stack is args[0]
     // But the arguments passed to Op.Run() is in the reverse direction
@@ -630,21 +741,28 @@ func (op * Op) Call(env * Environ) {
     //           -----------
     // args[-1]    Bottom
 // >>>>
-    var func_no, func_arity byte = 0, 0     // For type compatibility down ...
-    var match int       // The match flag;
+    func_no, func_arity := 0, 0
+    var match int       // The match flag
+    neas := 0           // Number of "Not enough arguments"
 
     // Try to match signature
     for i, tf := range op.Funcs {
-        match = match_sign(tf, env.stack)
-        if match == 0 {      // Not matched
+        match = MatchSign(tf, env.stack)
+        if match <= 0 {      // Not matched
+            if match == -1 {
+                neas ++
+            }
             goto next_func
         }
 
         // Signature matched
-        func_no = byte(i)
-        func_arity = byte(len(tf.Sign))
+        func_no = i
+        func_arity = len(tf.Sign)
         goto end_func_choose
 next_func:
+    }
+    if neas == len(op.Funcs) {
+        panic("Not enough arguments to call `" + op.String() + "`!")
     }
     // loop not end normally
     panic(fmt.Sprintf("%T %T `%s` not implemented!", env.stack.Get(0), env.stack.Get(1), op.Name))
@@ -654,22 +772,23 @@ end_func_choose:
     op_func := op.Funcs[func_no]
     wrapped := (op_func.Option & 0x10) > 0
     switch_opts := op_func.Option & 0x0F
-    sw_s, sw_e := switch_opts & 0xC0, switch_opts & 0x03
+    sw_s, sw_e := int(switch_opts & 0x0C), int(switch_opts & 0x03)
 
     var raw_args []interface{}
     var args *Stack
     if wrapped {
-        for i := 0; i < int(func_arity); i ++ {
-            raw_args = append(wrapa(env.Pop()), raw_args...)
+        for i := 0; i < func_arity; i ++ {
+            raw_args = append(raw_args, env.Pop())
         }
         args = NewStack(raw_args)
+        args.Reverse()
         if match == 2 {      // Only do a switch if it's a special match
-            args.Switch(int(sw_s), int(sw_e))
+            args.Switch(sw_s, sw_e)
         }
     } else {
         args = env.stack
         if match == 2 {
-            args.Switch(int(func_arity - sw_s - 1), int(func_arity - sw_e - 1))       // ... here
+            args.Switch(func_arity - sw_s - 1, func_arity - sw_e - 1)
         }
     }
 
@@ -687,38 +806,70 @@ var (
 )
 
 type Parser struct {
+    content     []rune
+    ptr         int
+    size        int
+    err         error
+
     LineNumber  int
     Offset      int
-    io.RuneScanner
 }
 
-func NewParser(reader io.RuneScanner) *Parser {
-    return &Parser{0, 0, reader}
+func NewParser(code string) *Parser {
+    content := []rune(code)
+    return &Parser{content, 0, len(content), nil,
+                   0, 0}
 }
 
 func (p * Parser) GetOffset() [2]int {
     return [2]int{p.LineNumber, p.Offset}
 }
 
-func (p * Parser) ReadRune() (c rune, e error) {
-    c, _, e = p.RuneScanner.ReadRune()      // Call the native ReadRune
+func (p * Parser) Read() (c rune, e error) {
+    if p.err != nil {
+        return 0, p.err
+    }
+    if p.ptr >= p.size {
+        c, e = 0, errors.New("EOF")
+        p.err = e
+        return
+    }
+    c = p.content[p.ptr]
+    p.ptr ++
+    p.Offset ++
     if c == '\n' {
-        p.LineNumber++
+        p.LineNumber ++
         p.Offset = 0
     }
     return
 }
 
-func (p * Parser) UnreadRune() error {
-    p.Offset--
-    return p.RuneScanner.UnreadRune()
+func (p * Parser) Unread() error {
+    if p.err != nil {
+        return p.err
+    }
+    if p.ptr == 0 {
+        p.err = errors.New("Start reached!")
+        return p.err
+    }
+    p.Offset --
+    p.ptr --
+    return nil
+}
+
+func (p * Parser) UnreadN(n int) {
+    for i := 0; i < n; i ++ {
+        if p.Unread() != nil {
+            panic(fmt.Sprintf("UnreadN(%d) reached start!", n))
+        }
+    }
 }
 
 func parse(code *Parser, withbrace bool) *Block {
     ops := make([]*Op, 0)
     offsets := make([][2]int, 0)
 
-    for c, err := code.ReadRune(); ; c, err = code.ReadRune() {
+    for c, err := code.Read(); ; c, err = code.Read() {
         if err != nil {
             if withbrace {
                 panic("Unfinished block")
@@ -734,10 +885,10 @@ func parse(code *Parser, withbrace bool) *Block {
             }
             panic("Unexpected `}`")
         case ';':       // A line comment
-            for c, err := code.ReadRune(); err == nil && c != '\n'; c, err = code.ReadRune() { }
+            for c, err := code.Read(); err == nil && c != '\n'; c, err = code.Read() { }
         default:
             offsets = append(offsets, code.GetOffset())
-            code.UnreadRune()
+            code.Unread()
             op := parseOp(code)
             ops = append(ops, op)
         }
@@ -752,19 +903,19 @@ func parseNumber(code *Parser, nega bool) *Op {
         num_str = append(num_str, '-')
     }
 
-    for c, err := code.ReadRune(); err == nil; c, err = code.ReadRune() {
+    for c, err := code.Read(); err == nil; c, err = code.Read() {
         switch {
-        case c >= '0' && c <= '9':
+        case is_digit(c):
             num_str = append(num_str, c)
         case c == '.':
             if float {
-                code.UnreadRune()
+                code.Unread()
                 goto end_parse
             }
             float = true
             num_str = append(num_str, c)
         default:
-            code.UnreadRune()
+            code.Unread()
             goto end_parse
         }
     }
@@ -779,18 +930,18 @@ end_parse:
 }
 
 func parseOp(code *Parser) *Op {
-    char, err := code.ReadRune()
+    char, err := code.Read()
     if err != nil {
         panic("Expects operator!")
     }
 
-    if char >= '0' && char <= '9' {
-        code.UnreadRune()
+    if is_digit(char) {
+        code.Unread()
         return parseNumber(code, false)
     }
 
-    if char >= 'A' && char <= 'Z' {
-        return op_pushVar(char)
+    if is_upper(char) {
+        return op_pushVar(string(char))
     }
 
     switch char {
@@ -798,12 +949,12 @@ func parseOp(code *Parser) *Op {
         return op_push(parse(code, true))
     case '"':       // String
         var str []rune
-        for char, _ := code.ReadRune(); err == nil; char, _ = code.ReadRune() {
+        for char, _ := code.Read(); err == nil; char, _ = code.Read() {
             if char == '"' {
                 return op_push(str)
             }
             if char == '\\' {
-                c, err := code.ReadRune()
+                c, err := code.Read()
                 if err != nil {
                     panic("Unfinished string!")
                 }
@@ -817,19 +968,67 @@ func parseOp(code *Parser) *Op {
         panic("Unfinished string!")
 
     case '\'':      // Char
-        actual_char, err := code.ReadRune()
+        actual_char, err := code.Read()
         if err != nil {
             panic("Unfinished char!")
         }
         return op_push(actual_char)
 
     case '-':
-        if next, _ := code.ReadRune(); next >= '0' && next <= '9' {     // Check if next is digit
-            code.UnreadRune()
+        if next, _ := code.Read(); is_digit(next) {     // Check if next is digit
+            code.Unread()
             return parseNumber(code, true)
         }
-        code.UnreadRune()       // Spit out the "possible digit"
+        code.Unread()       // Spit out the "possible digit"
         return findOp("-")
+
+    case '.':
+        next, _ := code.Read()
+        if next == '{' {
+            return op_vector(parse(code, true))
+        } else if is_upper(next) {
+            long_var_name := string(next)
+            for next, _ = code.Read(); is_letter(next); next, _ = code.Read() {
+                long_var_name += string(next)
+            }
+            code.Unread()
+            return op_pushVar("." + long_var_name)
+        } else {
+            code.Unread()
+            op := parseOp(code)
+            if op.HasArity(2) {
+                return op_vector(op)
+            }
+            panic("Invalid operator after `.`: " + op.String())
+        }
+
+    case ':':
+        next, _ := code.Read()
+        if is_upper(next) {
+            return op_setVar(string(next))
+        } else if next == '.' {
+            next, _ = code.Read()
+            if ! is_upper(next) {
+                code.UnreadN(2)     // The possible start of varname and the `.`
+                goto parse_op
+            }
+            long_var_name := string(next)
+            for next, _ = code.Read(); is_letter(next); next, _ = code.Read() {
+                long_var_name += string(next)
+            }
+            code.Unread()
+            return op_setVar("." + long_var_name)
+        }
+        code.Unread()
+parse_op:
+        op := parseOp(code)
+        if op.HasArity(1) {
+            return op_map(op)
+        }
+        if op.HasArity(2) {
+            return op_fold(op)
+        }
+        panic("Invalid operator after `:`: " + op.String())
 
     default:
         return findOp(string(char))
@@ -849,8 +1048,7 @@ func InitFuncs() {
     addOp(&Op{"!",// <<<<
     []TypedFunc{
         // Logical NOT
-        {"a",
-        0x10,
+        {"a", 0x10,
         func(env * Environ, x * Stack) *Stack {
             return wraps(to_i(! to_bool(x.Get1())))
         }},
@@ -858,8 +1056,7 @@ func InitFuncs() {
     addOp(&Op{"#",// <<<<
     []TypedFunc{
         // Numeric power
-        {"nn",
-        0x10,
+        {"nn", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             res := math.Pow(to_d(a), to_d(b))
@@ -870,8 +1067,7 @@ func InitFuncs() {
         }},
 
         // Find index
-        {"lv",
-        0x11,
+        {"lv", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             al := to_l(a)
@@ -885,8 +1081,7 @@ func InitFuncs() {
         }},
 
         // Find index that satisfy block
-        {"lb",
-        0x01,
+        {"lb", 0x01,
         func(env * Environ, x * Stack) *Stack {
             a, b := env.Pop2()
             al, bb := to_l(a), to_b(b)
@@ -905,8 +1100,7 @@ func InitFuncs() {
     addOp(&Op{"$",// <<<<
     []TypedFunc{
         // Copy from stack
-        {"n",
-        0x00,
+        {"n", 0x00,
         func(env * Environ, x * Stack) *Stack {
             ind := to_i(env.Pop())
             if ind > 0 {
@@ -918,8 +1112,7 @@ func InitFuncs() {
         }},
 
         // Simple sort
-        {"l",
-        0x10,
+        {"l", 0x10,
         func(env * Environ, x * Stack) *Stack {
             l := x.Get1()
             s := NewSorter(to_l(l), I)
@@ -928,8 +1121,7 @@ func InitFuncs() {
         }},
 
         // Sort by key
-        {"lb",
-        0x00,
+        {"lb", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a, b := env.Pop2()
             al, bb := to_l(a), to_b(b)
@@ -948,22 +1140,17 @@ func InitFuncs() {
     []TypedFunc{
         // Modulo
         // TODO The math.Remainder function is a bit weird
-        {"nn",
-        0x10,
+        {"nn", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             if any_double(a, b) {
-                //if to_d(a) < 0 {
-                //    return wraps(-math.Remainder(-to_d(a), -to_d(b)))
-                //}
                 return wraps(math.Remainder(to_d(a), to_d(b)))
             }
             return wraps(to_i(a) % to_i(b))
         }},
 
         // Every nth item
-        {"ln",
-        0x11,
+        {"ln", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             al, bi := to_l(a), to_i(b)
@@ -992,8 +1179,7 @@ func InitFuncs() {
         }},
 
         // Split (no empty parts)
-        {"lv",
-        0x11,
+        {"lv", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             if is_l(b) {
@@ -1004,8 +1190,7 @@ func InitFuncs() {
         }},
 
         // Foreach (wraps in a list)
-        {"bv",
-        0x01,
+        {"bv", 0x01,
         func(env * Environ, x * Stack) *Stack {
             a, b := env.Pop2()
             env.Mark()
@@ -1030,23 +1215,20 @@ func InitFuncs() {
     addOp(&Op{"&",// <<<<
     []TypedFunc{
         // Bitwise AND
-        {"ii",
-        0x10,
+        {"ii", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_i(a) & to_i(b))
         }},
 
-        {"ic",
-        0x11,
+        {"ic", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_c(to_i(a) & to_i(b)))
         }},
 
         // Set intersection
-        {"vv",
-        0x10,
+        {"vv", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             al, bl := wrapa(), wrapa()
@@ -1070,8 +1252,7 @@ func InitFuncs() {
         }},
 
         // If-then
-        {"vb",
-        0x00,
+        {"vb", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a, b := env.Pop2()
             if to_bool(a) {
@@ -1083,8 +1264,7 @@ func InitFuncs() {
     addOp(&Op{"(",// <<<<
     []TypedFunc{
         // Decrement
-        {"p",
-        0x10,
+        {"p", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a := x.Get1()
             var res interface{}
@@ -1100,8 +1280,7 @@ func InitFuncs() {
         }},
 
         // Uncons from left
-        {"l",
-        0x10,
+        {"l", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a := x.Get1()
             al := to_l(a)
@@ -1112,8 +1291,7 @@ func InitFuncs() {
     addOp(&Op{")",// <<<<
     []TypedFunc{
         // Increment
-        {"p",
-        0x10,
+        {"p", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a := x.Get1()
             var res interface{}
@@ -1129,8 +1307,7 @@ func InitFuncs() {
         }},
 
         // Uncons from right
-        {"l",
-        0x10,
+        {"l", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a := x.Get1()
             al := to_l(a)
@@ -1142,8 +1319,7 @@ func InitFuncs() {
     addOp(&Op{"*",// <<<<
     []TypedFunc{
         // Numeric multiplication
-        {"nn",
-        0x10,
+        {"nn", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             if any_double(a, b) {
@@ -1153,8 +1329,7 @@ func InitFuncs() {
         }},
 
         // Repeat value
-        {"vi",
-        0x11,
+        {"vi", 0x11,
         func(env * Environ, x * Stack) *Stack {
             s := []interface{}{}
             a, b := x.Get2()
@@ -1169,10 +1344,8 @@ func InitFuncs() {
         }},
 
         // Repeat block execution
-        {"bi",
-        0x01,
+        {"bi", 0x01,
         func(env * Environ, x * Stack) *Stack {
-            //b, a := env.Pop(), env.Pop()
             a, b := env.Pop2()
             for i := 0; int(i) < to_i(b); i ++ {
                 to_b(a).Run(env)
@@ -1181,8 +1354,7 @@ func InitFuncs() {
         }},
 
         // Join
-        {"lv",
-        0x10,
+        {"lv", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             res := wrapa()
@@ -1207,8 +1379,7 @@ func InitFuncs() {
             return wraps(res)
         }},
 
-        {"cl",
-        0x10,
+        {"cl", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             res := wrapa()
@@ -1227,8 +1398,7 @@ func InitFuncs() {
         }},
 
         // Fold / Reduce
-        {"lb",
-        0x01,
+        {"lb", 0x01,
         func(env * Environ, x * Stack) *Stack {
             a, b := env.Pop2()
             al, bb := to_l(a), to_b(b)
@@ -1246,8 +1416,7 @@ func InitFuncs() {
     addOp(&Op{"+",// <<<<
     []TypedFunc{
         // Numeric addition
-        {"nn",
-        0x10,
+        {"nn", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             if any_double(a, b) {
@@ -1257,40 +1426,35 @@ func InitFuncs() {
         }},
 
         // Character concatenation
-        {"cc",
-        0x10,
+        {"cc", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps([]rune{a.(rune), b.(rune)})
         }},
 
         // Character incrementation (-> Char)
-        {"cn",
-        0x11,
+        {"cn", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_c(a) + to_c(b))
         }},
 
         // List concat
-        {"ll",
-        0x10,
+        {"ll", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(append(to_l(a), to_l(b)...))
         }},
 
         // List append
-        {"la",
-        0x10,
+        {"la", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(append(to_l(a), b))
         }},
 
         // List append
-        {"al",
-        0x10,
+        {"al", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(append(wrapa(a), to_l(b)...))
@@ -1300,8 +1464,7 @@ func InitFuncs() {
     addOp(&Op{",",// <<<<
     []TypedFunc{
         // Range(stop)
-        {"n",
-        0x10,
+        {"n", 0x10,
         func(env * Environ, x * Stack) *Stack {
             n := to_i(x.Get1())
             if n < 0 {
@@ -1315,8 +1478,7 @@ func InitFuncs() {
         }},
 
         // Range for chars
-        {"c",
-        0x10,
+        {"c", 0x10,
         func(env * Environ, x * Stack) *Stack {
             n := to_i(x.Get1())
             res := wrapa()
@@ -1327,16 +1489,14 @@ func InitFuncs() {
         }},
 
         // Length
-        {"l",
-        0x10,
+        {"l", 0x10,
         func(env * Environ, x * Stack) *Stack {
             l := to_l(x.Get1())
             return wraps(len(l))
         }},
 
         // Filter
-        {"lb",
-        0x00,
+        {"lb", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a, b := env.Pop2()
             al, bb := to_l(a), to_b(b)
@@ -1352,8 +1512,7 @@ func InitFuncs() {
             return nil
         }},
 
-        {"nb",
-        0x00,
+        {"nb", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a, b := env.Pop2()
             ai, bb := to_i(a), to_b(b)
@@ -1372,8 +1531,7 @@ func InitFuncs() {
     addOp(&Op{"-",// <<<<
     []TypedFunc{
         // Numeric minus
-        {"nn",
-        0x10,
+        {"nn", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             if any_double(a, b) {
@@ -1383,24 +1541,21 @@ func InitFuncs() {
         }},
 
         // Character decrementation (-> Char)
-        {"cn",
-        0x11,
+        {"cn", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_c(a) - to_c(b))
         }},
 
         // Character difference (-> int)
-        {"cc",
-        0x11,
+        {"cc", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_i(a) - to_i(b))
         }},
 
         // Remove from list
-        {"la",
-        0x10,
+        {"la", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             al := to_l(a)
@@ -1422,8 +1577,7 @@ func InitFuncs() {
             return wraps(res)
         }},
 
-        {"pl",
-        0x10,
+        {"pl", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             for _, i := range to_l(b) {
@@ -1435,12 +1589,10 @@ func InitFuncs() {
         }},
     }})
 // >>>>
-// TODO `.` (dot)
     addOp(&Op{"/",// <<<<
     []TypedFunc{
         // Numberic division
-        {"nn",
-        0x10,
+        {"nn", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             if any_double(a, b) {
@@ -1450,8 +1602,7 @@ func InitFuncs() {
         }},
 
         // Split by length
-        {"ln",
-        0x11,
+        {"ln", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             n := to_i(b)
@@ -1474,8 +1625,7 @@ func InitFuncs() {
         }},
 
         // Split by sep
-        {"lv",
-        0x11,
+        {"lv", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             if is_l(b) {
@@ -1486,8 +1636,7 @@ func InitFuncs() {
         }},
 
         // Foreach
-        {"bv",
-        0x01,
+        {"bv", 0x01,
         func(env * Environ, x * Stack) *Stack {
             a, b := env.Pop2()
             ab := to_b(a)
@@ -1508,11 +1657,9 @@ func InitFuncs() {
         }},
     }})
 // >>>>
-// TODO `:` (colon)
     addOp(&Op{"`",  // From `;` to ```// <<<<
     []TypedFunc{
-        {"a",
-        0x10,
+        {"a", 0x10,
         func(env * Environ, x * Stack) *Stack {
             return wraps()
         }},
@@ -1520,8 +1667,7 @@ func InitFuncs() {
     addOp(&Op{"<",// <<<<
     []TypedFunc{
         // Slice before
-        {"li",
-        0x11,
+        {"li", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             al, bi := to_l(a), to_i(b)
@@ -1529,8 +1675,7 @@ func InitFuncs() {
         }},
 
         // Compare (Less than)
-        {"vv",
-        0x10,
+        {"vv", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_i(comp(a, b) < 0))
@@ -1539,8 +1684,7 @@ func InitFuncs() {
     addOp(&Op{"=",// <<<<
     []TypedFunc{
         // Get from list
-        {"li",
-        0x11,
+        {"li", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             al, bi := to_l(a), to_i(b)
@@ -1548,16 +1692,14 @@ func InitFuncs() {
         }},
 
         // Compare (Equals)
-        {"vv",
-        0x10,
+        {"vv", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_i(comp(a, b) == 0))
         }},
 
         // Find value satisfy condition
-        {"lb",
-        0x01,
+        {"lb", 0x01,
         func(env * Environ, x * Stack) *Stack {
             a, b := env.Pop2()
             al, bb := to_l(a), to_b(b)
@@ -1575,8 +1717,7 @@ func InitFuncs() {
     addOp(&Op{">",// <<<<
     []TypedFunc{
         // Slice after
-        {"li",
-        0x11,
+        {"li", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             al, bi := to_l(a), to_i(b)
@@ -1584,8 +1725,7 @@ func InitFuncs() {
         }},
 
         // Compare (Greater than)
-        {"vv",
-        0x10,
+        {"vv", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_i(comp(a, b) > 0))
@@ -1593,8 +1733,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"?",// <<<<
     []TypedFunc{
-        {"vaa",
-        0x00,
+        {"vaa", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a, b, c := env.Pop3()
             var conseq interface{}
@@ -1613,8 +1752,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"@",// <<<<
     []TypedFunc{
-        {"aaa",
-        0x10,
+        {"aaa", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b, c := x.Get3()
             return wraps(a, c, b)
@@ -1622,8 +1760,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"[",// <<<<
     []TypedFunc{
-        {"",
-        0x10,
+        {"", 0x10,
         func(env * Environ, x * Stack) *Stack {
             env.Mark()
             return wraps()
@@ -1631,8 +1768,7 @@ func InitFuncs() {
 // >>>>
     addOp(&Op{"\\",// <<<<
     []TypedFunc{
-        {"aa",
-        0x10,
+        {"aa", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(a, b)
@@ -1640,8 +1776,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"]",// <<<<
     []TypedFunc{
-        {"",
-        0x10,
+        {"", 0x10,
         func(env * Environ, x * Stack) *Stack {
             env.PopMark()
             return wraps()
@@ -1650,30 +1785,26 @@ func InitFuncs() {
     addOp(&Op{"^",// <<<<
     []TypedFunc{
         // Bitwise XOR
-        {"ii",
-        0x10,
+        {"ii", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_i(a) ^ to_i(b))
         }},
 
-        {"cc",
-        0x10,
+        {"cc", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_i(a) ^ to_i(b))
         }},
 
-        {"ic",
-        0x11,
+        {"ic", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_c(to_i(a) ^ to_i(b)))
         }},
 
         // Symmetric set diff
-        {"vv",
-        0x10,
+        {"vv", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             al, bl := wrapa(), wrapa()
@@ -1703,8 +1834,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"_",// <<<<
     []TypedFunc{
-        {"",
-        0x00,
+        {"a", 0x00,
         func(env * Environ, x * Stack) *Stack {
             x.Push(x.Get(0))
             return nil
@@ -1714,23 +1844,20 @@ func InitFuncs() {
     addOp(&Op{"|",// <<<<
     []TypedFunc{
         // Bitwise OR
-        {"ii",
-        0x10,
+        {"ii", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_i(a) | to_i(b))
         }},
 
-        {"ic",
-        0x11,
+        {"ic", 0x11,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             return wraps(to_c(to_i(a) | to_i(b)))
         }},
 
         // Set union
-        {"vv",
-        0x10,
+        {"vv", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
             al, bl := wrapa(), wrapa()
@@ -1759,8 +1886,7 @@ func InitFuncs() {
         }},
 
         // If-else
-        {"vb",
-        0x00,
+        {"vb", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a, b := env.Pop2()
             if ! to_bool(a) {
@@ -1772,22 +1898,20 @@ func InitFuncs() {
     addOp(&Op{"~",// <<<<
     []TypedFunc{
         // Bitwise NOT
-        {"i",
-        0x10,
+        {"i", 0x10,
         func(env * Environ, x * Stack) *Stack {
             return wraps(^to_i(x.Get1()))
         }},
 
         // Evaluate block/string/char, or dump list
-        {"a",
-        0x00,
+        {"a", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a := env.Pop()
             switch {
             case is_b(a):
                 to_b(a).Run(env)
             case is_s(a) || is_c(a):
-                parse(NewParser(strings.NewReader(to_s(a))), false).Run(env)
+                parse(NewParser(to_s(a)), false).Run(env)
             case is_l(a):
                 unwrapped := NewStack(to_l(a))
                 unwrapped.Reverse()
@@ -1797,14 +1921,14 @@ func InitFuncs() {
         }},
     }})// >>>>
     addOp(&Op{"t",// <<<<
-    []TypedFunc{{
-        "a",
-        0x00,
+    []TypedFunc{
+        {"a", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a := x.Get(0)
             fmt.Println("\x1b[33mDEBUG\x1b[0m type:", type_of(a))
             return nil
-        }}}})
+        }},
+    }})
 // >>>>
 }
 //>>>>
@@ -1975,8 +2099,21 @@ func adjust_indm(ind, size int) int {
     }
     return ind
 }
+
+func is_letter(c rune) bool {
+    return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+}
+
+func is_upper(c rune) bool {
+    return c >= 'A' && c <= 'Z'
+}
+
+func is_digit(c rune) bool {
+    return c >= '0' && c <= '9'
+}
 // >>>>
-func main() {// <<<<
+// Main// <<<<
+func main() {
     signals := make(chan os.Signal, 1)
     signal.Notify(signals, syscall.SIGINT)
     go func() {
@@ -1988,20 +2125,41 @@ func main() {// <<<<
     env := NewEnviron()
     InitFuncs()
 
-    var block *Block
     input := bufio.NewScanner(os.Stdin)
     fmt.Println("Cgam v1.0.0 by Steven.")
     fmt.Print(">>> ")
     for input.Scan() {
+        var block *Block
         code_str := input.Text()
         if code_str == "" {
             goto next
         }
-        block = parse(NewParser(strings.NewReader(code_str)), false)
+
+        // Parsing
+        func() {
+            defer func() {
+                if err := recover(); err != nil {
+                    fmt.Println("\x1b[33mERROR\x1b[0m: Parser:", err)
+                }
+            }()
+            block = parse(NewParser(code_str), false)
+        }()
+        if block == nil {
+            goto next
+        }
         fmt.Println("Block:", block)
-        block.Run(env)
-        env.stack.Dump()
-        env.stack.Clear()
+
+        // Running
+        func() {
+            defer func() {
+                if err := recover(); err != nil {
+                    fmt.Println("\x1b[33mERROR\x1b[0m: Runtime:", err)
+                }
+            }()
+            block.Run(env)
+            env.stack.Dump()
+            env.stack.Clear()
+        }()
 next:
         fmt.Print(">>> ")
     }
@@ -2009,7 +2167,7 @@ next:
 }
 
 func exit() {
-    fmt.Println("\nHappy jaming! " + ":)")//string(0x1f601))
+    fmt.Println("\nHappy jaming! " + ":)")
     os.Exit(0)
 }
 // >>>>
