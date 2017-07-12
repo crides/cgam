@@ -8,9 +8,9 @@ import (
     "os"
     "os/signal"
     "reflect"
-    "regexp"
     "sort"
     "strconv"
+    "strings"
     "syscall"
 )
 // TODO The math.Remainder function is a bit weird
@@ -104,11 +104,8 @@ func (x * Stack) Switch(a, b int) {
 }
 
 func (x * Stack) Reverse() {    // Reverse in-place
-    i, j := 0, x.Size() - 1
-    for i <= j {
+    for i, j := 0, x.Size() - 1; i <= j; i, j = i + 1, j - 1 {
         x.Switch(i, j)
-        i ++
-        j --
     }
 }
 // >>>>
@@ -180,8 +177,7 @@ func (env * Environ) PopMark() {
     if size > 0 {
         mark, env.marks = env.marks[size - 1], env.marks[:size - 1]
     }
-    length := env.stack.Size()
-    end := length - mark
+    end := env.stack.Size() - mark
     wrapped := NewStack((*env.stack)[:end])
     wrapped.Reverse()       // For compat
     *env.stack = append(wrapa([]interface{}(*wrapped)), (*env.stack)[end:]...)
@@ -223,10 +219,9 @@ func (env * Environ) InitVars() {
 // Type predicates//<<<<
 func type_of(a interface{}) string {
     switch {
+    case is_s(a):
+        return "string"
     case is_l(a):
-        if is_s(a) {
-            return "string"
-        }
         return "list"
     case is_c(a):
         return "char"
@@ -291,10 +286,6 @@ func _type_eq(a interface{}, typ string) bool {
     return reflect.TypeOf(a).String() == typ
 }
 
-func both_of(a, b interface{}, typ string) bool {
-    return _type_eq(a, typ) && _type_eq(b, typ)
-}
-
 func any_of(a, b interface{}, typ string) bool {
     return _type_eq(a, typ) || _type_eq(b, typ)
 }
@@ -338,10 +329,6 @@ func is_s(a interface{}) bool {
 
 func is_b(a interface{}) bool {
     return _type_eq(a, "*main.Block")
-}
-
-func both_double(a, b interface{}) bool {
-    return both_of(a, b, "float64")
 }
 
 func any_double(a, b interface{}) bool {
@@ -506,18 +493,21 @@ func NewBlock(ops []*Op, offsets [][2]int) *Block {
     if len(ops) == len(offsets) {
         return &Block{ops, offsets}
     }
-    panic("Unmatch sizes!")
+    panic("Sizes not matched!")
 }
 
 func (b * Block) Run(env * Environ) {
-    for _, op := range b.Ops {
+    for i, op := range b.Ops {
+        if i == 0 {
+            defer func() {
+                if err := recover(); err != nil {
+                    offsets := b.Offsets[i]
+                    panic(NewRuntimeError(offsets[0], offsets[1], to_s(err)))
+                }
+            }()
+        }
         op.Run(env)
     }
-    defer func() {
-        if err := recover(); err != nil {
-            fmt.Println("\x1b[33mERROR\x1b[0m: Parser:", err)
-        }
-    }()
 }
 
 func (b * Block) String() string {
@@ -531,6 +521,21 @@ func (b * Block) String() string {
         s = append(s, '}')
     }
     return string(s)
+}
+
+type RuntimeError struct {
+    LnNum   int
+    Offset  int
+
+    Msg     string
+}
+
+func NewRuntimeError(ln, offs int, msg string) *RuntimeError {
+    return &RuntimeError{ln, offs, msg}
+}
+
+func (e * RuntimeError) Error() string {
+    return e.Msg
 }
 //>>>>
 type Runner interface {// <<<<
@@ -800,56 +805,55 @@ end_func_choose:
 }
 //>>>>
 // Parsing//<<<<
-var (
-    PATT_DOUBLE, _ = regexp.Compile("-?\\d+(\\.\\d+)?")
-    PATT_NUM, _ = regexp.Compile("-?\\d+")
-)
-
 type Parser struct {
-    content     []rune
-    ptr         int
-    size        int
-    err         error
+    source  string
 
-    LineNumber  int
-    Offset      int
+    content []rune
+    ptr     int
+    size    int
+    err     error
+
+    LnNum   int
+    Offset  int
 }
 
-func NewParser(code string) *Parser {
+func NewParser(src, code string) *Parser {
     content := []rune(code)
-    return &Parser{content, 0, len(content), nil,
+    return &Parser{src,
+                   content, 0, len(content), nil,
                    0, 0}
 }
 
+func (p * Parser) GetSrc() string {
+    return p.source
+}
+
 func (p * Parser) GetOffset() [2]int {
-    return [2]int{p.LineNumber, p.Offset}
+    return [2]int{p.LnNum, p.Offset}
 }
 
 func (p * Parser) Read() (c rune, e error) {
+    if p.ptr >= p.size {
+        p.err = errors.New("EOF")
+    }
     if p.err != nil {
         return 0, p.err
-    }
-    if p.ptr >= p.size {
-        c, e = 0, errors.New("EOF")
-        p.err = e
-        return
     }
     c = p.content[p.ptr]
     p.ptr ++
     p.Offset ++
     if c == '\n' {
-        p.LineNumber ++
+        p.LnNum ++
         p.Offset = 0
     }
     return
 }
 
 func (p * Parser) Unread() error {
-    if p.err != nil {
-        return p.err
-    }
     if p.ptr == 0 {
         p.err = errors.New("Start reached!")
+    }
+    if p.err != nil {
         return p.err
     }
     p.Offset --
@@ -988,7 +992,7 @@ func parseOp(code *Parser) *Op {
             return op_vector(parse(code, true))
         } else if is_upper(next) {
             long_var_name := string(next)
-            for next, _ = code.Read(); is_letter(next); next, _ = code.Read() {
+            for next, _ = code.Read(); is_varchar(next); next, _ = code.Read() {
                 long_var_name += string(next)
             }
             code.Unread()
@@ -1013,7 +1017,7 @@ func parseOp(code *Parser) *Op {
                 goto parse_op
             }
             long_var_name := string(next)
-            for next, _ = code.Read(); is_letter(next); next, _ = code.Read() {
+            for next, _ = code.Read(); is_varchar(next); next, _ = code.Read() {
                 long_var_name += string(next)
             }
             code.Unread()
@@ -1733,6 +1737,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"?",// <<<<
     []TypedFunc{
+        // Ternary if
         {"vaa", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a, b, c := env.Pop3()
@@ -1752,6 +1757,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"@",// <<<<
     []TypedFunc{
+        // Rotate
         {"aaa", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b, c := x.Get3()
@@ -1760,6 +1766,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"[",// <<<<
     []TypedFunc{
+        // Start list
         {"", 0x10,
         func(env * Environ, x * Stack) *Stack {
             env.Mark()
@@ -1768,6 +1775,7 @@ func InitFuncs() {
 // >>>>
     addOp(&Op{"\\",// <<<<
     []TypedFunc{
+        // Swap
         {"aa", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
@@ -1776,6 +1784,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"]",// <<<<
     []TypedFunc{
+        // End list
         {"", 0x10,
         func(env * Environ, x * Stack) *Stack {
             env.PopMark()
@@ -1834,6 +1843,7 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"_",// <<<<
     []TypedFunc{
+        // Duplicate
         {"a", 0x00,
         func(env * Environ, x * Stack) *Stack {
             x.Push(x.Get(0))
@@ -1911,7 +1921,7 @@ func InitFuncs() {
             case is_b(a):
                 to_b(a).Run(env)
             case is_s(a) || is_c(a):
-                parse(NewParser(to_s(a)), false).Run(env)
+                parse(NewParser("<block>", to_s(a)), false).Run(env)
             case is_l(a):
                 unwrapped := NewStack(to_l(a))
                 unwrapped.Reverse()
@@ -1936,7 +1946,7 @@ func InitFuncs() {
 func preproc(l []interface{}) (p []int) {
     subl := len(l)
     p = append(p, -1)
-    for i, n := 1, 0; i < subl; i ++ {
+    for i, n := 1, 0; i < subl; i, n = i + 1, n + 1 {
         if equals(l[i], l[n]) {
             p = append(p, p[n])
         } else {
@@ -1946,7 +1956,6 @@ func preproc(l []interface{}) (p []int) {
                 n = p[n]
             }
         }
-        n ++
     }
     return
 }
@@ -1979,7 +1988,7 @@ func split(s, sub []interface{}, empty bool) []interface{} {
 
     l := make([]interface{}, 0)
     x := 0
-    for i, m := 0, 0; i < sl; i ++ {
+    for i, m := 0, 0; i < sl; i, m = i + 1, m + 1 {
         for m >= 0 && ! equals(sub[m], s[i]) {
             m = p[m]
         }
@@ -1991,7 +2000,6 @@ func split(s, sub []interface{}, empty bool) []interface{} {
             x = i + 1
             m = -1
         }
-        m ++
     }
     t := s[x:len(s)]
     if empty || ! (len(t) == 0) {
@@ -2005,14 +2013,13 @@ func find(s, sub []interface{}) int {
     sl := len(s)
     max := len(sub) - 1
 
-    for i, m := 0, 0; i < sl; i ++ {
+    for i, m := 0, 0; i < sl; i, m = i + 1, m + 1 {
         for m >= 0 && ! equals(sub[m], s[i]) {
             m = p[m]
         }
         if m == max {
             return i - m
         }
-        m ++
     }
     return -1
 }
@@ -2093,15 +2100,15 @@ func adjust_ind(ind, size int) int {
 
 func adjust_indm(ind, size int) int {
     ind %= size
-    fmt.Println("adjust_indm: ind % size:", ind)
+    //fmt.Println("adjust_indm: ind % size:", ind)
     if ind < 0 {
         ind += size
     }
     return ind
 }
 
-func is_letter(c rune) bool {
-    return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+func is_varchar(c rune) bool {
+    return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '_'
 }
 
 func is_upper(c rune) bool {
@@ -2130,19 +2137,24 @@ func main() {
     fmt.Print(">>> ")
     for input.Scan() {
         var block *Block
+        var parser *Parser
         code_str := input.Text()
         if code_str == "" {
             goto next
         }
 
         // Parsing
+        parser = NewParser("<stdin>", code_str)
         func() {
             defer func() {
                 if err := recover(); err != nil {
                     fmt.Println("\x1b[33mERROR\x1b[0m: Parser:", err)
+                    fmt.Printf("    at %s %d:%d:\n", parser.GetSrc(), parser.LnNum, parser.Offset)
+                    fmt.Printf("    %s\n", strings.Split(string(parser.content), "\n")[parser.LnNum])
+                    fmt.Printf("    %s^\n", strings.Repeat(" ", parser.Offset - 1))
                 }
             }()
-            block = parse(NewParser(code_str), false)
+            block = parse(parser, false)
         }()
         if block == nil {
             goto next
@@ -2153,7 +2165,11 @@ func main() {
         func() {
             defer func() {
                 if err := recover(); err != nil {
-                    fmt.Println("\x1b[33mERROR\x1b[0m: Runtime:", err)
+                    runerr := err.(*RuntimeError)
+                    fmt.Println("\x1b[33mERROR\x1b[0m: Runtime:", runerr.Msg)
+                    fmt.Printf("    at %s %d:%d:\n", parser.GetSrc(), runerr.LnNum, runerr.Offset)
+                    fmt.Printf("    %s\n", strings.Split(string(parser.content), "\n")[parser.LnNum])
+                    fmt.Printf("    %s^\n", strings.Repeat(" ", runerr.Offset - 1))
                 }
             }()
             block.Run(env)
