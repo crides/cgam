@@ -1,18 +1,23 @@
 package main
 
-import (
+import (// <<<<
     "bufio"
     "errors"
     "fmt"
+    "io"
     "io/ioutil"
     "math"
+    "net/http"
     "os"
+    "os/exec"
     "os/signal"
+    "os/user"
     "sort"
     "strconv"
     "strings"
     "syscall"
-)
+    "time"
+)// >>>>
 // TODO The math.Remainder function is a bit weird
 // TODO The alphabet operators
 // The memo for recursive functions (`y`)// <<<<
@@ -86,8 +91,9 @@ func (x * Stack) Cut(a, b int) *Stack {
 func (x * Stack) Dump() {
     fmt.Println("--- Top of Stack ---")
     for _, i := range *x {
-        s := to_s(i)
-        fmt.Printf("%s | %v\n", s, i)
+        //s := to_s(i)
+        //fmt.Printf("%s | %v\n", s, i)
+        fmt.Println(to_v(i))
     }
     fmt.Println("--- Bottom of Stack ---")
 }
@@ -215,6 +221,11 @@ func (env * Environ) InitVars() {
     }
     env.vars = append(env.vars, wrapa([]rune{}, []rune{}, []rune{'\n'}, []rune{}, math.Pi, []rune{}, []rune{}, []rune{' '}, 0, 0, 0, -1, 1, 2, 3)...)
     //                                 L   M    N    O   P        Q   R    S   T  U  V  W   X  Y  Z
+}
+
+func (env * Environ) ResetVars() {
+    env.vars = make([]interface{}, 0)
+    //env.longVars = make(map[string]interface{})
 }
 // >>>>
 // Type predicates//<<<<
@@ -439,6 +450,8 @@ func to_v(a interface{}) string {       // To value string
         return fmt.Sprint(b)
     case []rune:
         return fmt.Sprintf("%q", string(b))
+    case string:
+        return fmt.Sprintf("%q", b)
     case rune:
         return "'" + string(b)
     case []interface{}:
@@ -805,7 +818,7 @@ next_func:
         panic("Not enough arguments to call `" + op.String() + "`!")
     }
     // loop not end normally
-    panic(fmt.Sprintf("%T %T `%s` not implemented!", env.stack.Get(0), env.stack.Get(1), op.Name))
+    panic(fmt.Sprintf("%T %T `%s` not implemented!", env.stack.Get(1), env.stack.Get(0), op.Name))
 
 end_func_choose:
     // Prepare the arguements; switch if needed
@@ -1076,6 +1089,10 @@ func parseOp(code *Parser) *Op {
             return op_map2(op)
         }
         panic("Invalid operator after `f`: " + op.String())
+
+    case 'o':       // The `os` module
+        next, _ := code.Read()
+        return findOp("o" + string(next))
 
     default:
         return findOp(string(char))
@@ -2040,9 +2057,47 @@ func InitFuncs() {
         }},
     }})// >>>>
     // TODO `e`
-    // TODO `f`
-    // TODO `g`
-    // TODO `h`
+    addOp(&Op{"g",// <<<<
+    []TypedFunc{
+        // Do-while (popping the condition)
+        {"b", 0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a := env.Pop()
+            ab := to_b(a)
+            ab.Run(env)
+            for to_bool(env.Pop()) {
+                ab.Run(env)
+            }
+            return nil
+        }},
+
+        // TODO Get from URL (See test.go)
+        {"s", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            url := to_s(x.Get1())
+            if ! strings.Contains(url, "://") {
+                url = "http://" + url
+            }
+            resp, _ := http.Get(url)
+            s, _ := ioutil.ReadAll(resp.Body)
+            resp.Body.Close()
+            return wraps(string(s))
+        }},
+    }})// >>>>
+    addOp(&Op{"h",// <<<<
+    []TypedFunc{
+        // Do-while (without popping the condition)
+        {"b", 0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a := env.Pop()
+            ab := to_b(a)
+            ab.Run(env)
+            for to_bool(x.Get(0)) {
+                ab.Run(env)
+            }
+            return nil
+        }},
+    }})// >>>>
     addOp(&Op{"i",// <<<<
     []TypedFunc{
         // Convert to int
@@ -2064,7 +2119,303 @@ func InitFuncs() {
         }},
     }})// >>>>
     // TODO `m`
-    // TODO `o` The 'os' module
+    // The 'os' module// <<<<
+    // Brief:// <<<<
+    // Use file objects???
+    // oa: Append to file
+    // oa/oA: CLI Arguments (maybe in extend operators?)
+    // oc/oC: Change directory
+    // od: create Directory
+    // oe: file Exists?
+    // of: create File
+    // og/or: read from file (Get)
+    // oh/op/oW: working directory (consider as Home?)
+    // ol: List directory
+    // om: Move file/directory
+    // on/oo: chowN
+    // oo/oM: chmOd
+    // op/oc: coPy file/directory
+    // oq: exit (Quit)
+    // or/oR: Remove file/directory
+    // os: Symlink
+    // ot: current Time
+    // ou: Unix time
+    // ow: Write to file
+    // ox: eXecute
+    // oX: eXecute with specified input and output as string// >>>>
+    addOp(&Op{"oa",// <<<<
+    []TypedFunc{
+        // Append to file
+        {"ss", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            f, err := os.OpenFile(to_s(a), os.O_WRONLY | os.O_APPEND | os.O_CREATE, 0666)
+            defer f.Close()
+            if err != nil {
+                panic(err.Error())
+            }
+            bs := to_s(b)
+            _, err = f.WriteString(bs)
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"oc",// <<<<
+    []TypedFunc{
+        // Change directory
+        {"s", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a := x.Get1()
+            err := os.Chdir(to_s(a))
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"od",// <<<<
+    []TypedFunc{
+        // Create directory (mkdir -p)
+        {"s", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            err := os.MkdirAll(to_s(x.Get1()), 0775)
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"oe",// <<<<
+    []TypedFunc{
+        // Check if file exists (test -f)
+        {"s", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            _, err := os.Stat(to_s(x.Get1()))
+            return wraps(to_i(!os.IsNotExist(err)))
+        }},
+    }})// >>>>
+    addOp(&Op{"of",// <<<<
+    []TypedFunc{
+        // Create file
+        {"s", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            f, err := os.Create(to_s(x.Get1()))
+            defer f.Close()
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"og",// <<<<
+    []TypedFunc{
+        // Read file
+        {"s", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            d, err := ioutil.ReadFile(to_s(x.Get1()))
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps(string(d))
+        }},
+    }})// >>>>
+    addOp(&Op{"oh",// <<<<
+    []TypedFunc{
+        // Get working directory (pwd)
+        {"", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            dir, err := os.Getwd()
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps(dir)
+        }},
+    }})// >>>>
+    addOp(&Op{"ol",// <<<<
+    []TypedFunc{
+        // List directory
+        {"s", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            files, err := ioutil.ReadDir(to_s(x.Get1()))
+            if err != nil {
+                panic(err.Error())
+            }
+            res := wrapa()
+            for _, f := range files {
+                res = append(res, f.Name())
+            }
+            return wraps(res)
+        }},
+    }})// >>>>
+    addOp(&Op{"om",// <<<<
+    []TypedFunc{
+        // Move file to destination (mv)
+        {"ss", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            exe("mv", to_s(a), to_s(b))
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"on",// <<<<
+    []TypedFunc{
+        // Change owner (chown)
+        {"ss", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            usr, err := user.Lookup(to_s(b))
+            if err != nil {
+                panic(err.Error())
+            }
+            uid, _ := strconv.Atoi(usr.Uid)
+            gid, _ := strconv.Atoi(usr.Gid)
+            err = os.Chown(to_s(a), uid, gid)
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"oo",// <<<<
+    []TypedFunc{
+        // Change mode of file (chmod)
+        {"ss", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            exe("chmod", to_s(b), to_s(a))
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"op",// <<<<
+    []TypedFunc{
+        // Copy file to destination (cp)
+        {"ss", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            exe("cp", to_s(a), to_s(b))
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"oq",// <<<<
+    []TypedFunc{
+        // Exit (exit)
+        {"i", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            os.Exit(to_i(x.Get1()))
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"or",// <<<<
+    []TypedFunc{
+        // Remove file or directory (rm)
+        {"s", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            exe("rm", "-rf", to_s(x.Get1()))
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"os",// <<<<
+    []TypedFunc{
+        // Create symlink (ln -s)
+        {"ss", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            err := os.Symlink(to_s(a), to_s(b))
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"ot",// <<<<
+    []TypedFunc{
+        // Time
+        {"", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            now := time.Now()
+            yr, mo, day := now.Date()
+            hr, min, sec := now.Clock()
+            nano := now.Nanosecond() / 1000000  // Get milliseconds
+            _, zone := now.Zone()
+            zone /= 3600        // Get hours
+            return wraps(wrapa(yr, int(mo), day, hr, min, sec, nano, zone))
+        }},
+    }})// >>>>
+    addOp(&Op{"ou",// <<<<
+    []TypedFunc{
+        // Milliseconds since Epoch (date +%s)
+        {"", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            return wraps(int(time.Now().UnixNano() / 1000000))
+        }},
+    }})// >>>>
+    addOp(&Op{"ow",// <<<<
+    []TypedFunc{
+        // Write to file
+        {"ss", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            f, err := os.OpenFile(to_s(a), os.O_WRONLY | os.O_CREATE, 0666)
+            defer f.Close()
+            if err != nil {
+                panic(err.Error())
+            }
+            bs := to_s(b)
+            _, err = f.WriteString(bs)
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"ox",// <<<<
+    []TypedFunc{
+        // Execute command with args
+        {"sl", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := x.Get2()
+            args := make([]string, 0)
+            for _, i := range to_l(b) {
+                args = append(args, to_s(i))
+            }
+            cmd := exec.Command(to_s(a), args...)
+            output, err := cmd.CombinedOutput()
+            fmt.Print(string(output))
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps()
+        }},
+    }})// >>>>
+    addOp(&Op{"oX",// <<<<
+    []TypedFunc{
+        {"sls", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            a, b, c := x.Get3()
+            args := make([]string, 0)
+            for _, i := range to_l(b) {
+                args = append(args, to_s(i))
+            }
+            cmd := exec.Command(to_s(a), args...)
+            stdin, err := cmd.StdinPipe()
+            defer stdin.Close()
+            if err != nil {
+                panic(err.Error())
+            }
+
+            _, err = io.WriteString(stdin, to_s(c))
+            if err != nil {
+                panic(err.Error())
+            }
+            output, err := cmd.CombinedOutput()
+            if err != nil {
+                panic(err.Error())
+            }
+            return wraps(string(output))
+        }},
+    }})//>>>>//>>>>
     addOp(&Op{"p",// <<<<
     []TypedFunc{
         // Print (no newline)
@@ -2102,6 +2453,14 @@ func InitFuncs() {
             return wraps(al)
         }},
     }})// >>>>
+    addOp(&Op{"v",// <<<<
+    []TypedFunc{
+        // Value representation
+        {"a", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            return wraps(to_v(x.Get1()))
+        }},
+    }})// >>>>
     addOp(&Op{"w",// <<<<
     []TypedFunc{
         // While
@@ -2119,6 +2478,13 @@ func InitFuncs() {
             return wraps()
         }},
     }})// >>>>
+    // TODO `x` The `Xfer` module// <<<<
+    // xp: HTTP POST
+    // xg: HTTP GET
+    // xj: JSON encode
+    // xk: JSON decode (maybe xJ?)
+    // xx: XML encode
+    // xy: XML decode (maybe xX?)// >>>>
     addOp(&Op{"z",// <<<<
     []TypedFunc{
         // Absolute value
@@ -2165,11 +2531,11 @@ func InitFuncs() {
         {"a", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a := x.Get(0)
-            fmt.Println("\x1b[33mDEBUG\x1b[0m type:", type_of(a))
+            fmt.Printf("\x1b[33mDEBUG\x1b[0m type: %s (%T)\n", type_of(a), a)
             return nil
         }},
-    }})
-// >>>>// >>>>
+    }})// >>>>
+// >>>>
 }
 //>>>>
 // Helper functions// <<<<
@@ -2348,6 +2714,13 @@ func is_upper(c rune) bool {
 func is_digit(c rune) bool {
     return c >= '0' && c <= '9'
 }
+
+func exe(cmd string, args ...string) {
+    err := exec.Command(cmd, args...).Run()
+    if err != nil {
+        panic(err.Error())
+    }
+}
 // >>>>
 // Main// <<<<
 func main() {
@@ -2404,8 +2777,8 @@ func main() {
             }()
             block.Run(env)
             env.stack.Dump()
-            env.stack.Clear()
         }()
+        env.stack.Clear()
 next:
         fmt.Print(">>> ")
     }
@@ -2413,7 +2786,7 @@ next:
 }
 
 func exit() {
-    fmt.Println("\nHappy jaming! " + ":)")
+    fmt.Println("\nHappy jaming! :)")
     os.Exit(0)
 }
 // >>>>
