@@ -2056,7 +2056,7 @@ func InitFuncs() {
             return wraps(to_d(x.Get1()))
         }},
     }})// >>>>
-    // TODO `e`
+    // TODO `e` The extended operators (misc module)
     addOp(&Op{"g",// <<<<
     []TypedFunc{
         // Do-while (popping the condition)
@@ -2118,7 +2118,7 @@ func InitFuncs() {
             return wraps("\n")
         }},
     }})// >>>>
-    // TODO `m`
+    // TODO `m` The Math module
     // The 'os' module// <<<<
     // Brief:// <<<<
     // Use file objects???
@@ -2425,7 +2425,7 @@ func InitFuncs() {
             return wraps()
         }},
     }})// >>>>
-    addOp(&Op{"r",// <<<<
+    addOp(&Op{"q",// <<<<
     []TypedFunc{
         // Read all input
         {"", 0x10,
@@ -2434,6 +2434,7 @@ func InitFuncs() {
             return wraps([]rune(string(data)))
         }},
     }})// >>>>
+    // TODO `r` The Regex module
     addOp(&Op{"s",// <<<<
     []TypedFunc{
         // Stringify
