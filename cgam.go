@@ -27,8 +27,54 @@ type Memo struct {
     cache   map[interface{}]interface{}
 }
 
-func NewMemo(init map[interface{}]interface{}, b *Block, n int) *Memo {
-    return &Memo{b, n, init}
+func NewMemo(b *Block, n int) *Memo {
+    return &Memo{b, n, make(map[interface{}]interface{})}
+}
+
+func (m * Memo) Set(entry []interface{}, val interface{}) {
+    if len(entry) != m.arity {
+        panic("`y` function arity and entry length doesn't match!")
+    }
+    m.cache[&entry] = val
+}
+
+//def set(self, l, o, n):
+//    if n == 0:
+//        if self.n == 1:
+//            self.m[repr(l[0])] = o
+//        else:
+//            self.m[repr(l)] = o
+//        return
+//    ol = o
+//    for i in range(len(ol)):
+//        l.append(i)
+//        self.set(l, ol[i], n - 1)
+//        l.pop()
+
+func (m * Memo) Get(entry []interface{}) (interface{}, bool) {
+    if len(entry) != m.arity {
+        panic("`y` function arity and entry length doesn't match!")
+    }
+    item, ok := m.cache[&entry]
+    return item, ok
+}
+
+func (m * Memo) Run(env * Environ) {
+    var args []interface{}
+    for i := 0; i < m.arity; i ++ {
+        args = append(args, env.Pop())
+    }
+    Reverse(args)
+
+    if res, cached := m.Get(args); cached {
+        env.Push(res)
+        return
+    }
+    for _, a := range args {
+        env.Push(a)
+    }
+    m.block.Run(env)
+    m.Set(args, env.stack.Get(0))
 }
 // >>>>
 // The stack// <<<<
@@ -106,6 +152,10 @@ func (x * Stack) Size() int {
     return len(*x)
 }
 
+func (x * Stack) Contents() []interface{} {
+    return []interface{}(*x)
+}
+
 func (x * Stack) Switch(a, b int) {
     (*x)[a], (*x)[b] = (*x)[b], (*x)[a]
 }
@@ -113,6 +163,12 @@ func (x * Stack) Switch(a, b int) {
 func (x * Stack) Reverse() {    // Reverse in-place
     for i, j := 0, x.Size() - 1; i <= j; i, j = i + 1, j - 1 {
         x.Switch(i, j)
+    }
+}
+
+func Reverse(arr []interface{}) {    // Reverse in-place
+    for i, j := 0, len(arr) - 1; i <= j; i, j = i + 1, j - 1 {
+        arr[i], arr[j] = arr[j], arr[i]
     }
 }
 // >>>>
@@ -229,7 +285,7 @@ func (env * Environ) ResetVars() {
 }
 // >>>>
 // Type predicates//<<<<
-func type_of(a interface{}) string {
+func typeof(a interface{}) string {
     switch a.(type) {
     case []rune, string:
         return "string"
@@ -250,6 +306,11 @@ func type_of(a interface{}) string {
         return "block"
     }
     return "unknown"
+}
+
+// Full type (Cgam type and Go type) of the object. Used in debug.
+func fulltype(a interface{}) string {
+    return fmt.Sprintf("%s (%T)", typeof(a), a)
 }
 
 func type_eq(a interface{}, typ rune) bool {
@@ -274,7 +335,7 @@ func type_eq(a interface{}, typ rune) bool {
         if is_n(a) || is_l(a) || is_b(a) || is_c(a) {
             return true
         }
-        panic(fmt.Sprintf("Invalid type!: %T", a))
+        panic("Invalid type!: " + fulltype(a))
     case 'b':
         return is_b(a)
     case 'c':
@@ -298,7 +359,7 @@ func type_eq(a interface{}, typ rune) bool {
 }
 
 func any_of(a, b interface{}, typ string) bool {
-    return type_of(a) == typ || type_of(b) == typ
+    return typeof(a) == typ || typeof(b) == typ
 }
 
 func is_n(a interface{}) bool {
@@ -306,27 +367,27 @@ func is_n(a interface{}) bool {
 }
 
 func is_i(a interface{}) bool {
-    return type_of(a) == "int"
+    return typeof(a) == "int"
 }
 
 func is_d(a interface{}) bool {
-    return type_of(a) == "double"
+    return typeof(a) == "double"
 }
 
 func is_c(a interface{}) bool {
-    return type_of(a) == "char"
+    return typeof(a) == "char"
 }
 
 func is_l(a interface{}) bool {
-    return type_of(a) == "list" || is_s(a)
+    return typeof(a) == "list" || is_s(a)
 }
 
 func is_s(a interface{}) bool {
-    return type_of(a) == "string"
+    return typeof(a) == "string"
 }
 
 func is_b(a interface{}) bool {
-    return type_of(a) == "block"
+    return typeof(a) == "block"
 }
 
 func any_double(a, b interface{}) bool {
@@ -335,7 +396,7 @@ func any_double(a, b interface{}) bool {
 //>>>>
 // Type conversions// <<<<
 func not_convertible(a interface{}, typ string) {
-    panic(fmt.Sprintf("Cannot convert %s (%T) to %s!", type_of(a), a, typ))
+    panic(fmt.Sprintf("Cannot convert %s to %s!", fulltype(a), typ))
 }
 
 func to_d(a interface{}) float64 {
@@ -439,37 +500,34 @@ func to_s(a interface{}) string {
         return s
     case fmt.Stringer:
         return b.String()
+    case error:
+        return b.Error()
     default:
         return fmt.Sprint(b)
     }
 }
 
 func to_v(a interface{}) string {       // To value string
-    switch b := a.(type) {
-    case int, float64:
-        return fmt.Sprint(b)
-    case []rune:
-        return fmt.Sprintf("%q", string(b))
-    case string:
-        return fmt.Sprintf("%q", b)
-    case rune:
-        return "'" + string(b)
-    case []interface{}:
+    switch {
+    case is_n(a):
+        return fmt.Sprint(a)
+    case is_s(a):
+        return fmt.Sprintf("%q", to_s(a))
+    case is_c(a):
+        return "'" + to_s(a)
+    case is_l(a):
         s := "["
-        for _, i := range b {
+        for _, i := range to_l(a) {
             s += to_v(i) + " "
         }
         if len(s) == 1 {
             return "[]"
         }
         return s[:len(s) - 1] + "]"
-    case *Block:
-        return b.String()
+    case is_b(a):
+        return to_b(a).String()
     default:
-        if is_s(a) {
-            return to_s(a)
-        }
-        panic(fmt.Sprintf("Invalid type %T!", b))
+        panic(fmt.Sprintf("Invalid type %s!", fulltype(a)))
     }
 }
 
@@ -491,13 +549,16 @@ func to_bool(a interface{}) bool {
 //>>>>
 // Block//<<<<
 type Block struct {
-    Ops     []*Op
-    Offsets [][2]int    // LineNum & Offset
+    Ops         []*Op
+    Offsets     [][2]int    // LineNum & Offset
+    withbrace   bool        // Whether the block has braces when parsing
+
+    parser      *Parser     // Link the parser for source code reference
 }
 
-func NewBlock(ops []*Op, offsets [][2]int) *Block {
+func NewBlock(ops []*Op, offsets [][2]int, wb bool, parser *Parser) *Block {
     if len(ops) == len(offsets) {
-        return &Block{ops, offsets}
+        return &Block{ops, offsets, wb, parser}
     }
     panic("Sizes not matched!")
 }
@@ -508,7 +569,21 @@ func (b * Block) Run(env * Environ) {
             defer func() {
                 if err := recover(); err != nil {
                     offsets := b.Offsets[i]
-                    panic(NewRuntimeError(offsets[0], offsets[1], to_s(err)))
+                    lnum := offsets[0]
+                    column := offsets[1]
+                    if err != SIGNAL {  // Error is a native error; prints header
+                        fmt.Println("\x1b[31mERROR\x1b[0m: Runtime:", err.(string))
+                    }
+                    fmt.Printf(
+`  at %s line %d:
+    %s
+    %s^
+`,
+                    // Both line number and column should start from 1.
+                    b.parser.GetSrc(), lnum + 1,
+                    strings.Split(string(b.parser.content), "\n")[lnum],
+                    strings.Repeat(" ", column - 1))
+                    panic(SIGNAL)
                 }
             }()
         }
@@ -523,11 +598,16 @@ func (b * Block) String() string {
     }
     if s[len(s) - 1] == ' ' {
         s[len(s) - 1] = '}'
-    } else {
+    } else if b.withbrace {
         s = append(s, '}')
+    }
+    if ! b.withbrace {
+        return string(s[1:len(s) - 1])
     }
     return string(s)
 }
+
+var SIGNAL string = "!#\ufdd0"
 
 type RuntimeError struct {
     LnNum   int
@@ -744,6 +824,24 @@ func op_map2(r Runner) *Op {
     }}
 }
 
+func op_e10(a interface{}) *Op {
+    if ! is_n(a) {
+        panic("Argument to exp is not number!")
+    }
+    return &Op{"e" + to_s(a),
+    []TypedFunc{
+        {"n", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            n := x.Get1()
+            res := to_d(n) * math.Pow(10, to_d(a))
+            if res == to_d(to_i(res)) && ! any_double(a, n) {
+                return wraps(to_i(res))
+            }
+            return wraps(res)
+        }},
+    }}
+}
+
 func MatchSign(tf TypedFunc, x * Stack) int {
     // Return value:
     // -1 not enough arguments
@@ -805,50 +903,58 @@ func (op * Op) Run(env * Environ) {
             if match == -1 {
                 neas ++
             }
-            goto next_func
+        } else {
+            // Signature matched
+            func_no = i
+            func_arity = len(tf.Sign)
+            break
+        }
+    }
+    if match > 0 {
+        // Prepare the arguements; switch if needed
+        op_func := op.Funcs[func_no]
+        wrapped := (op_func.Option & 0x10) > 0
+        switch_opts := op_func.Option & 0x0F
+        sw_s, sw_e := int(switch_opts & 0x0C), int(switch_opts & 0x03)
+
+        var raw_args []interface{}
+        var args *Stack
+        if wrapped {
+            for i := 0; i < func_arity; i ++ {
+                raw_args = append(raw_args, env.Pop())
+            }
+            args = NewStack(raw_args)
+            args.Reverse()
+            if match == 2 {      // Only do a switch if it's a special match
+                args.Switch(sw_s, sw_e)
+            }
+        } else {
+            args = env.stack
+            if match == 2 {
+                args.Switch(func_arity - sw_s - 1, func_arity - sw_e - 1)
+            }
         }
 
-        // Signature matched
-        func_no = i
-        func_arity = len(tf.Sign)
-        goto end_func_choose
-next_func:
-    }
-    if neas == len(op.Funcs) {
-        panic("Not enough arguments to call `" + op.String() + "`!")
-    }
-    // loop not end normally
-    panic(fmt.Sprintf("%T %T `%s` not implemented!", env.stack.Get(1), env.stack.Get(0), op.Name))
-
-end_func_choose:
-    // Prepare the arguements; switch if needed
-    op_func := op.Funcs[func_no]
-    wrapped := (op_func.Option & 0x10) > 0
-    switch_opts := op_func.Option & 0x0F
-    sw_s, sw_e := int(switch_opts & 0x0C), int(switch_opts & 0x03)
-
-    var raw_args []interface{}
-    var args *Stack
-    if wrapped {
-        for i := 0; i < func_arity; i ++ {
-            raw_args = append(raw_args, env.Pop())
-        }
-        args = NewStack(raw_args)
-        args.Reverse()
-        if match == 2 {      // Only do a switch if it's a special match
-            args.Switch(sw_s, sw_e)
+        // Calling the function
+        result := op_func.Func(env, args)
+        if wrapped {
+            env.Pusha(result)
         }
     } else {
-        args = env.stack
-        if match == 2 {
-            args.Switch(func_arity - sw_s - 1, func_arity - sw_e - 1)
+        if neas == len(op.Funcs) {
+            panic("Too few things on stack to call `" + op.String() + "`!")
         }
-    }
-
-    // Calling the function
-    result := op_func.Func(env, args)
-    if wrapped {
-        env.Pusha(result)
+        // loop not end normally
+        report_size := env.stack.Size() // How many arguments should report
+        last_arity := len(op.Funcs[len(op.Funcs) - 1].Sign)
+        if last_arity < report_size {
+            report_size = last_arity
+        }
+        types := make([]string, report_size)
+        for i := 0; i < report_size; i ++ {
+            types[i] = typeof(env.stack.Get(report_size - i - 1))
+        }
+        panic(fmt.Sprintf("%s `%s` not implemented!", strings.Join(types, " "), op.Name))
     }
 }
 //>>>>
@@ -926,14 +1032,14 @@ func parse(code *Parser, withbrace bool) *Block {
             if withbrace {
                 panic("Unfinished block")
             }
-            return NewBlock(ops, offsets)
+            return NewBlock(ops, offsets, withbrace, code)
         }
 
         switch c {
         case ' ', '\t', '\n':
         case '}':
             if withbrace {
-                return NewBlock(ops, offsets)
+                return NewBlock(ops, offsets, withbrace, code)
             }
             panic("Unexpected `}`")
         case ';':       // A line comment
@@ -947,13 +1053,9 @@ func parse(code *Parser, withbrace bool) *Block {
     }
 }
 
-func parseNumber(code *Parser, nega bool) *Op {
+func parseNumber(code *Parser) interface{} {
     var num_str []rune       // String repr for the result number
-    float := false
-
-    if nega {
-        num_str = append(num_str, '-')
-    }
+    float, nega := false, false
 
     for c, err := code.Read(); err == nil; c, err = code.Read() {
         switch {
@@ -966,6 +1068,13 @@ func parseNumber(code *Parser, nega bool) *Op {
             }
             float = true
             num_str = append(num_str, c)
+        case c == '-':
+            if nega {
+                code.Unread()
+                goto end_parse
+            }
+            nega = true
+            num_str = append(num_str, c)
         default:
             code.Unread()
             goto end_parse
@@ -975,10 +1084,10 @@ func parseNumber(code *Parser, nega bool) *Op {
 end_parse:
     if float {
         num_f, _ := strconv.ParseFloat(string(num_str), 64)
-        return op_push(num_f)
+        return num_f
     }
     num_i, _ := strconv.ParseInt(string(num_str), 10, 0)
-    return op_push(int(num_i))
+    return int(num_i)
 }
 
 func parseOp(code *Parser) *Op {
@@ -989,7 +1098,7 @@ func parseOp(code *Parser) *Op {
 
     if is_digit(char) {
         code.Unread()
-        return parseNumber(code, false)
+        return op_push(parseNumber(code))
     }
 
     if is_upper(char) {
@@ -1001,7 +1110,7 @@ func parseOp(code *Parser) *Op {
         return op_push(parse(code, true))
     case '"':       // String
         var str []rune
-        for char, _ := code.Read(); err == nil; char, _ = code.Read() {
+        for char, err := code.Read(); err == nil; char, err = code.Read() {
             if char == '"' {
                 return op_push(str)
             }
@@ -1029,7 +1138,8 @@ func parseOp(code *Parser) *Op {
     case '-':
         if next, _ := code.Read(); is_digit(next) {     // Check if next is digit
             code.Unread()
-            return parseNumber(code, true)
+            code.Unread()
+            return op_push(parseNumber(code))
         }
         code.Unread()       // Spit out the "possible digit"
         return findOp("-")
@@ -1090,9 +1200,25 @@ func parseOp(code *Parser) *Op {
         }
         panic("Invalid operator after `f`: " + op.String())
 
-    case 'o':       // The `os` module
+    case 'e':
         next, _ := code.Read()
-        return findOp("o" + string(next))
+        if is_digit(next) || next == '-' || next == '.' {
+            code.Unread()
+            return op_e10(parseNumber(code))
+        }
+        return findOp(string(char) + string(next))
+
+    case 'm':
+        next, _ := code.Read()
+        if is_digit(next) || next == '-' || next == '.' {
+            code.Unread()
+            return findOp("-")
+        }
+        return findOp(string(char) + string(next))
+
+    case 'o', 'r', 'x':       // The `os`, `regex`, `xfer` modules
+        next, _ := code.Read()
+        return findOp(string(char) + string(next))
 
     default:
         return findOp(string(char))
@@ -1804,6 +1930,47 @@ func InitFuncs() {
     }})// >>>>
     addOp(&Op{"?",// <<<<
     []TypedFunc{
+        // Switch (cond)
+        {"vl", 0x00,
+        func(env * Environ, x * Stack) *Stack {
+            a, b := env.Pop2()
+            for _, c := range to_l(b) {
+                truth := false
+                var conseq interface{}
+                if ! is_l(c) {
+                    truth = true
+                    conseq = c
+                } else {
+                    cl := to_l(c)
+                    _case := cl[0]
+                    switch {
+                    case len(cl) == 1:
+                        truth = true
+                        cl = append(wrapa(0), cl...)    // Insert a placeholder so that the
+                                                        // next step can correctly process it
+                    case is_b(_case):
+                        env.Push(a)
+                        to_b(_case).Run(env)
+                        truth = to_bool(env.Pop())
+                    case is_l(_case):
+                        truth = find(to_l(_case), wrapa(a)) > -1
+                    default:
+                        truth = equals(a, _case)
+                    }
+                    conseq = cl[1]
+                }
+                if truth {
+                    if is_b(conseq) {
+                        to_b(conseq).Run(env)
+                    } else {
+                        env.Push(conseq)
+                    }
+                    return nil
+                }
+            }
+            return nil
+        }},
+
         // Ternary if
         {"vaa", 0x00,
         func(env * Environ, x * Stack) *Stack {
@@ -1988,7 +2155,7 @@ func InitFuncs() {
             case is_b(a):
                 to_b(a).Run(env)
             case is_s(a) || is_c(a):
-                parse(NewParser("<block>", to_s(a)), false).Run(env)
+                parse(NewParser("<string>", to_s(a)), false).Run(env)
             case is_l(a):
                 unwrapped := NewStack(to_l(a))
                 unwrapped.Reverse()
@@ -2248,6 +2415,19 @@ func InitFuncs() {
             }
             return wraps(res)
         }},
+
+        {"c", 0x10,
+        func(env * Environ, x * Stack) *Stack {
+            files, err := ioutil.ReadDir(to_s(x.Get1()))
+            if err != nil {
+                panic(err.Error())
+            }
+            res := wrapa()
+            for _, f := range files {
+                res = append(res, f.Name())
+            }
+            return wraps(res)
+        }},
     }})// >>>>
     addOp(&Op{"om",// <<<<
     []TypedFunc{
@@ -2421,7 +2601,7 @@ func InitFuncs() {
         // Print (no newline)
         {"a", 0x10,
         func(env * Environ, x * Stack) *Stack {
-            fmt.Println(to_s(x.Get1()))
+            fmt.Print(to_s(x.Get1()))
             return wraps()
         }},
     }})// >>>>
@@ -2434,7 +2614,14 @@ func InitFuncs() {
             return wraps([]rune(string(data)))
         }},
     }})// >>>>
-    // TODO `r` The Regex module
+    // TODO `r` The `regex` module// <<<<
+    // rm: Checks if s matchs the pattern /^pat$/
+    // rf: Trys to find a match matching the pattern /pat/, and return true if finds
+    // rs: Like rf, but return a string
+    // rl: Like rf, but return a list containing the match if exists, and the start and end
+    //     positions
+    // ra: Like rs, but find all matches, as if with "g" flag
+    // re: return everything, like `ra` and `rl` combined// >>>>
     addOp(&Op{"s",// <<<<
     []TypedFunc{
         // Stringify
@@ -2486,6 +2673,45 @@ func InitFuncs() {
     // xk: JSON decode (maybe xJ?)
     // xx: XML encode
     // xy: XML decode (maybe xX?)// >>>>
+    addOp(&Op{"y",// <<<<
+    []TypedFunc{
+        // Recurse function (No signature because it's not fixed)
+        {"", 0x00,
+        func(env * Environ, x * Stack) *Stack {
+            defer func() {
+                // Handle the index err paniced by the `Get` and `Pop` functions
+                if err := recover(); err != nil {
+                    if strings.Contains(fmt.Sprint(err), "bounds") {
+                        panic("Not enough arguments to call `y`!")
+                    } else {
+                        panic(err)
+                    }
+                }
+            }()
+
+            if m := env.GetMemo(); m != nil {
+                m.Run(env)
+                return nil
+            }
+            arity := 1
+            var block *Block
+            a := env.Pop()
+            if is_i(a) {
+                arity = to_i(a)
+                block = to_b(env.Pop())
+            } else if is_b(a) {
+                block = to_b(a)
+            } else {
+                panic(fmt.Sprintf("%T `y` not implemented!", typeof(a)))
+            }
+            //cache := env.Pop()
+            memo := NewMemo(block, arity)
+            env.SetMemo(memo)
+            memo.Run(env)
+            env.SetMemo(nil)
+            return nil
+        }},
+    }})// >>>>
     addOp(&Op{"z",// <<<<
     []TypedFunc{
         // Absolute value
@@ -2527,12 +2753,12 @@ func InitFuncs() {
             return wraps(res)
         }},
     }})// >>>>
-    addOp(&Op{"x",// <<<<
+    addOp(&Op{"xx",// <<<<
     []TypedFunc{
         {"a", 0x00,
         func(env * Environ, x * Stack) *Stack {
             a := x.Get(0)
-            fmt.Printf("\x1b[33mDEBUG\x1b[0m type: %s (%T)\n", type_of(a), a)
+            fmt.Printf("\x1b[33mDEBUG\x1b[0m type: %s\n", fulltype(a))
             return nil
         }},
     }})// >>>>
@@ -2558,7 +2784,7 @@ func preproc(l []interface{}) (p []int) {
 }
 
 func equals(a, b interface{}) bool {
-    if ! (type_of(a) == type_of(b)) {
+    if ! (typeof(a) == typeof(b)) {
         return false
     }
 
@@ -2747,15 +2973,28 @@ func main() {
             goto next
         }
 
+        //// For debug
+        //parser = NewParser("<stdin>", code_str)
+        //block = parse(parser, false)
+        //fmt.Println("Block:", block)
+        //block.Run(env)
+        //env.stack.Dump()
+        //env.stack.Clear()
+
         // Parsing
         parser = NewParser("<stdin>", code_str)
         func() {
             defer func() {
                 if err := recover(); err != nil {
-                    fmt.Println("\x1b[33mERROR\x1b[0m: Parser:", err)
-                    fmt.Printf("    at %s %d:%d:\n", parser.GetSrc(), parser.LnNum, parser.Offset)
-                    fmt.Printf("    %s\n", strings.Split(string(parser.content), "\n")[parser.LnNum])
-                    fmt.Printf("    %s^\n", strings.Repeat(" ", parser.Offset - 1))
+                    fmt.Println("\x1b[31mERROR\x1b[0m: Parser:", err)
+                    fmt.Printf(
+`  at %s line %d:
+    %s
+    %s^
+`,
+                    parser.GetSrc(), parser.LnNum + 1,
+                    strings.Split(string(parser.content), "\n")[parser.LnNum],
+                    strings.Repeat(" ", parser.Offset - 1))
                 }
             }()
             block = parse(parser, false)
@@ -2768,13 +3007,7 @@ func main() {
         // Running
         func() {
             defer func() {
-                if err := recover(); err != nil {
-                    runerr := err.(*RuntimeError)
-                    fmt.Println("\x1b[33mERROR\x1b[0m: Runtime:", runerr.Msg)
-                    fmt.Printf("    at %s %d:%d:\n", parser.GetSrc(), runerr.LnNum, runerr.Offset)
-                    fmt.Printf("    %s\n", strings.Split(string(parser.content), "\n")[parser.LnNum])
-                    fmt.Printf("    %s^\n", strings.Repeat(" ", runerr.Offset - 1))
-                }
+                recover()   // Nothing, just empty `catch`
             }()
             block.Run(env)
             env.stack.Dump()

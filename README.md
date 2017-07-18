@@ -25,7 +25,7 @@ In Cjam, there are 26 variables for each upper case letters other than the stack
 ```
 and `:` is used to assign a value to a variable, or do `map` or `fold` operations on a list.
 
-In Cgam, this 2 are switched, and like `.`, `:` can also be followed by a block literal.
+In Cgam, this 2 are switched, because one-list operations should be used on one dot, and two-list operations should be used on two dots (colon). And like `.`, `:` can also be followed by a block literal.
 5. In Cgam, variables can have names longer than one character.
 6. In Cgam, more modules (or extended operators) are added (`os`, `regex`, `xfer`).
 7. In Cgam, user defined modules can be added.
@@ -45,6 +45,8 @@ I don't even know exactly why myself ... But somehow I want to make it more like
 3. Why use ... Go?
 
 Sorry, I just want to practise myself in using this language. Go is a faster language compare to Java (the startup for Cjam is slow), but it also has wrapped types and operations compare to C.
+
+4. Also, maybe reverse to what Paradoc want to do, I don't want to include any characters outside of ASCII. Other than making the program shorter by one or two bytes isn't that important, but the program should also be easily typed on a normal 104/105 key keyboard.
 
 # Building and usage
 
