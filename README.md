@@ -56,7 +56,7 @@ Nothing special, just clone the code and `go build cgam.go`! (Sorry, I haven't f
 
 # Contributing
 
-I am open to pull requests, and you can help me test and open issues! But I do have some concern on which features should I choose to use in Cgam. You can see the [discussion](#Discussion) section below.
+I am open to pull requests, and you can help me test and open issues! But I do have some concern on which features should I choose to use in Cgam. You can see the [discussion](#discussion) section below.
 
 ## Discussion
 
