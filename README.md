@@ -64,7 +64,7 @@ I am open to pull requests, and you can help me test and open issues! But I do h
 
 1. Namespaces
 
-To add more functionalities to Cgam, I used many two-character operators, but that immediately increases the program length. To make it more "code-golfable", I want to add namespaces so that thru `u?` (`?` is a char`), later in the source code we don't have to write two characters. For example, if somewhere we used `uo`, which means switching to the `os` namespace (or module), then before the next `u?`, we can use `x` to directly execute a command instead of `ox`.
+To add more functionalities to Cgam, I used many two-character operators, but that immediately increases the program length. To make it more "code-golfable", I want to add namespaces so that thru `u?` (`?` is a char), later in the source code we don't have to write two characters. For example, if somewhere we used `uo`, which means switching to the `os` namespace (or module), then before the next `u?`, we can use `x` to directly execute a command instead of `ox`.
 
 But that leads to another problem. This feature is definitely in the parser. Using the example from above, when I use `uo` and then `x`, how can the parser know if the `x` is the `ox` operator, or is it the first character in something like `xg`? Of course I can look forward a char to see if the two character can form a new operator or not, but that definitely decreases readability.
 
@@ -76,9 +76,7 @@ Another concern I have is whether to add a `.X` operator to explicitly push the 
 
 This is a little bit far-streching to a language like Cgam, but it is interesting to add sucu a feature, though it may be difficult. The problems are:
     - How to recognize a module file? Maybe add a line like this:?
-
 ```lisp
         ; Package x
 ```
-
     - How to import a module? Still use `ux`?
