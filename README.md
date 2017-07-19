@@ -48,6 +48,37 @@ Sorry, I just want to practise myself in using this language. Go is a faster lan
 
 4. Also, maybe reverse to what Paradoc want to do, I don't want to include any characters outside of ASCII. Other than making the program shorter by one or two bytes isn't that important, but the program should also be easily typed on a normal 104/105 key keyboard.
 
+5. But similar to Paradoc, I do want to make cgam easier to write, that the operators and their meanings *must* be related. So I changed some operators' names (especially the alphabet operators), to reduce weird operators (like `j`, `h`, and `g`, so I replaced `j` with `y`, because the `Y` combinator is used for recursion in lambda calculus).
+
 # Building and usage
 
 Nothing special, just clone the code and `go build cgam.go`! (Sorry, I haven't familiar myself with `go get` and file splitting in Go ...) Running `./cgam` will then take you to the REPL. (Running file and CLI arguments will soon be supported.)
+
+# Contributing
+
+I am open to pull requests, and you can help me test and open issues! But I do have some concern on which features should I choose to use in Cgam. You can see the [discussion](#Discussion) section below.
+
+## Discussion
+
+**NOTE:** This sections includes some thoughts I have about which feature to use or not.
+
+1. Namespaces
+
+To add more functionalities to Cgam, I used many two-character operators, but that immediately increases the program length. To make it more "code-golfable", I want to add namespaces so that thru `u?` (`?` is a char`), later in the source code we don't have to write two characters. For example, if somewhere we used `uo`, which means switching to the `os` namespace (or module), then before the next `u?`, we can use `x` to directly execute a command instead of `ox`.
+
+But that leads to another problem. This feature is definitely in the parser. Using the example from above, when I use `uo` and then `x`, how can the parser know if the `x` is the `ox` operator, or is it the first character in something like `xg`? Of course I can look forward a char to see if the two character can form a new operator or not, but that definitely decreases readability.
+
+2. Explicit variable pushing
+
+Another concern I have is whether to add a `.X` operator to explicitly push the variable onto the stack. The reason is, sometimes a two-char operator's second char is upper case, and if I use namespaces to abbreviate it, then it may become a upper case operator, which can be confusing to the parser and programmer. So maybe a explicit variable pushing operator should be added, and then we can also use more operators (we can use uppercase letters in single-char operators).
+
+3. User-defined modules
+
+This is a little bit far-streching to a language like Cgam, but it is interesting to add sucu a feature, though it may be difficult. The problems are:
+    - How to recognize a module file? Maybe add a line like this:?
+
+```lisp
+        ; Package x
+```
+
+    - How to import a module? Still use `ux`?

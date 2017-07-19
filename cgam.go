@@ -1240,7 +1240,6 @@ func InitFuncs() {
     //    situation, often the latter situation's signature is hard to represent.
     //
     // 5. The order of the operators is the order of the corespondent Unicode code-points.// >>>>
-
     // Symbol operators// <<<<
     addOp(&Op{"!",// <<<<
     []TypedFunc{
@@ -2617,11 +2616,17 @@ func InitFuncs() {
     // TODO `r` The `regex` module// <<<<
     // rm: Checks if s matchs the pattern /^pat$/
     // rf: Trys to find a match matching the pattern /pat/, and return true if finds
-    // rs: Like rf, but return a string
+    // rr: Like rf, but return the result (a string)
     // rl: Like rf, but return a list containing the match if exists, and the start and end
     //     positions
-    // ra: Like rs, but find all matches, as if with "g" flag
-    // re: return everything, like `ra` and `rl` combined// >>>>
+    // ra: Like rs, but returns a list of all matches, as if with "g" flag
+    // re: return everything, like `ra` and `rl` combined
+    // ru/rA: Like rf, but with flags. `src` `pat` `flags` rA.
+    //
+    // rs: Sub. substitutes a pattern with the replacement. `src` `pat` `repl` rs. `repl` can
+    //     be a block.
+    // rt/rS: Sub with flags. `src` `pat` `repl` `flags` rS.
+    // >>>>
     addOp(&Op{"s",// <<<<
     []TypedFunc{
         // Stringify
@@ -2670,9 +2675,9 @@ func InitFuncs() {
     // xp: HTTP POST
     // xg: HTTP GET
     // xj: JSON encode
-    // xk: JSON decode (maybe xJ?)
+    // xk/xJ: JSON decode
     // xx: XML encode
-    // xy: XML decode (maybe xX?)// >>>>
+    // xy/xX: XML decode// >>>>
     addOp(&Op{"y",// <<<<
     []TypedFunc{
         // Recurse function (No signature because it's not fixed)
