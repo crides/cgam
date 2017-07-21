@@ -3,9 +3,9 @@ Cgam
 
 # Introduction
 
-Cgam is a stack-based programming implemented in Go that can be used for code golfing. It's derived from [Cjam](https://sourceforge.net/projects/cjam/), but has some major differences.
+Cgam is a stack-based programming language implemented in Go that can be used for code golfing. It's derived from [Cjam](https://sourceforge.net/projects/cjam/), but has some major differences.
 
-## Stack-base languages
+## Stack-based languages
 
 Stack-based languages works on a stack that grow and shrink. The operations available for these languages are commonly push, pop or run an operation on one or more values. But languages like cjam (and of course, cgam) provide more operations for operating on the stack and also on values. Stack-based languages usually uses the [Reverse-Polish notation](https://en.wikipedia.org/wiki/Reverse_Polish_notation) syntax, which eliminates the need for braces and making the syntax much more simpler.
 

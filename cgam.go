@@ -585,26 +585,26 @@ var SIGNAL string = "!#\ufdd0"
 func (b * Block) Run(env * Environ) {
     for i, op := range b.Ops {
         if i == 0 {
-//            defer func() {
-//                if err := recover(); err != nil {
-//                    offsets := b.Offsets[i]
-//                    lnum := offsets[0]
-//                    column := offsets[1]
-//                    if err != SIGNAL {  // Error is a native error; prints header
-//                        fmt.Println("\x1b[31mERROR\x1b[0m: Runtime:", to_s(err))
-//                    }
-//                    fmt.Printf(
-//`  at %s line %d:
-//    %s
-//    %s^
-//`,
-//                    // Both line number and column should start from 1.
-//                    b.parser.GetSrc(), lnum + 1,
-//                    strings.Split(string(b.parser.content), "\n")[lnum],
-//                    strings.Repeat(" ", column - 1))
-//                    panic(SIGNAL)
-//                }
-//            }()
+            defer func() {
+                if err := recover(); err != nil {
+                    offsets := b.Offsets[i]
+                    lnum := offsets[0]
+                    column := offsets[1]
+                    if err != SIGNAL {  // Error is a native error; prints header
+                        fmt.Println("\x1b[31mERROR\x1b[0m: Runtime:", to_s(err))
+                    }
+                    fmt.Printf(
+`  at %s line %d:
+    %s
+    %s^
+`,
+                    // Both line number and column should start from 1.
+                    b.parser.GetSrc(), lnum + 1,
+                    strings.Split(string(b.parser.content), "\n")[lnum],
+                    strings.Repeat(" ", column - 1))
+                    panic(SIGNAL)
+                }
+            }()
         }
         op.Run(env)
     }
@@ -2386,7 +2386,6 @@ func InitFuncs() {
             var k int
             res := wrapa(al)
             for {
-                fmt.Println(al)
                 ol := al
                 al = make([]interface{}, as)
                 copy(al, ol)
@@ -2948,12 +2947,12 @@ func InitFuncs() {
         func(env * Environ, x * Stack) *Stack {
             al := to_l(x.Get1())
             as := len(al)
-            p := findOp("e!").Funcs[0].Func(env, wraps(as))
+            p := findOp("e!").Funcs[1].Func(env, wraps(as))
             res := wrapa()
-            for _, o := range p {
+            for _, o := range to_l(p.Contents()[0]) {
                 ol := to_l(o)
                 for i := 0; i < as; i ++ {
-                    ol[i] = al[ol[i]]
+                    ol[i] = al[to_i(ol[i])]
                 }
                 res = append(res, ol)
             }
@@ -3952,7 +3951,7 @@ func main() {
         // Running
         func() {
             defer func() {
-                //recover()   // Nothing, just empty `catch`
+                recover()   // Nothing, just empty `catch`
             }()
             block.Run(env)
             env.stack.Dump()
