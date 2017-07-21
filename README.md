@@ -65,17 +65,17 @@ I am open to pull requests, and you can help me test and open issues! And I have
 
 **NOTE:** This sections includes some thoughts I have about which feature to use or not.
 
-1. name spaces
+1. **name spaces**
 
 To add more functionalities to Cgam, I used many two-character operators, but that immediately increases the program length. To make it more "code-golfable", I want to add name spaces so that through `u?` (`?` is a char), later in the source code we don't have to write two characters. For example, if somewhere we used `uo`, which means switching to the `os` name space (or module), then before the next `u?`, we can use `x` to directly execute a command instead of `ox`.
 
 But that leads to another problem. This feature is definitely in the parser. Using the example from above, when I use `uo` and then `x`, how can the parser know if the `x` is the `ox` operator, or is it the first character in something like `xg`? Of course I can look forward a char to see if the two character can form a new operator or not, but that definitely decreases readability.
 
-2. Explicit variable pushing
+2. **Explicit variable pushing**
 
 Another concern I have is whether to add a `.X` operator to explicitly push the variable onto the stack. The reason is, sometimes a two-char operator's second char is upper case, and if I use name spaces to abbreviate it, then it may become a upper case operator, which can be confusing to the parser and programmer. So maybe a explicit variable pushing operator should be added, and then we can also use more operators (we can use uppercase letters in single-char operators).
 
-3. User-defined modules
+3. **User-defined modules**
 
 This is a little bit far-streching to a language like Cgam, but it is interesting to add such a feature, though it may be difficult. The problems are:
 
