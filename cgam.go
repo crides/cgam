@@ -611,17 +611,20 @@ func (b * Block) Run(env * Environ) {
 }
 
 func (b * Block) String() string {
-    s := []byte{'{'}
+    var s []byte
+    if b.withbrace {
+        s = append(s, '{')
+    }
     for _, op := range b.Ops {
         s = append(s, append([]byte(op.String()), ' ')...)
+    }
+    if len(s) == 0 {
+        return ""
     }
     if s[len(s) - 1] == ' ' {
         s[len(s) - 1] = '}'
     } else if b.withbrace {
         s = append(s, '}')
-    }
-    if ! b.withbrace {
-        return string(s[1:len(s) - 1])
     }
     return string(s)
 }

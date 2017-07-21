@@ -7,7 +7,7 @@ Cgam is a stack-based programming language implemented in Go that can be used fo
 
 ## Stack-based languages
 
-Stack-based languages works on a stack that grow and shrink. The operations available for these languages are commonly push, pop or run an operation on one or more values. But languages like cjam (and of course, cgam) provide more operations for operating on the stack and also on values. Stack-based languages usually uses the [Reverse-Polish notation](https://en.wikipedia.org/wiki/Reverse_Polish_notation) syntax, which eliminates the need for braces and making the syntax much more simpler.
+Stack-based languages works on a stack that grows and shrinks. The operations available for these languages are commonly pushing, poping or operating on one or more values. But languages like cjam (and of course, cgam) provide more operations for operating on the stack and also on values. Stack-based languages usually uses the [Reverse-Polish notation](https://en.wikipedia.org/wiki/Reverse_Polish_notation) syntax, which eliminates the need for braces and making the syntax much more simpler.
 
 In Cjam or Cgam, the common operations would be pushing a value, rotating the stack, calling a function (or procedure, in a more exact way), popping a value, etc.
 
