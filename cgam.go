@@ -23,7 +23,6 @@ import (// <<<<
     "time"
 )// >>>>
 // TODO The math.Remainder function is a bit weird
-// TODO The alphabet operators
 // The memo for recursive functions (`y`)// <<<<
 type Memo struct {
     block   *Block
@@ -2599,7 +2598,7 @@ func InitFuncs() {
             return wraps("\n")
         }},
     }})// >>>>
-    // TODO `m` The Math module// <<<<
+    // The Math module// <<<<
     addOp(&Op{"m<",// From e< // <<<<
     []TypedFunc{
         // Min
