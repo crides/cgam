@@ -27,29 +27,16 @@ import (// <<<<
 type Memo struct {
     block   *Block
     arity   int
-    cache   map[interface{}]interface{}
+    cache   map[string]interface{}
 }
 
 func NewMemo(b *Block, n int) *Memo {
-    return &Memo{b, n, make(map[interface{}]interface{})}
+    return &Memo{b, n, make(map[string]interface{})}
 }
 
 func (m * Memo) Set(entry []interface{}, val interface{}) {
     m.cache[to_v(entry)] = val
 }
-
-//def set(self, l, o, n):
-//    if n == 0:
-//        if self.n == 1:
-//            self.m[repr(l[0])] = o
-//        else:
-//            self.m[repr(l)] = o
-//        return
-//    ol = o
-//    for i in range(len(ol)):
-//        l.append(i)
-//        self.set(l, ol[i], n - 1)
-//        l.pop()
 
 func (m * Memo) Get(entry []interface{}) (interface{}, bool) {
     item, ok := m.cache[to_v(entry)]
@@ -57,21 +44,19 @@ func (m * Memo) Get(entry []interface{}) (interface{}, bool) {
 }
 
 func (m * Memo) Run(env * Environ) {
-    var args []interface{}
+    args := NewStack(nil)
     for i := 0; i < m.arity; i ++ {
-        args = append(args, env.Pop())
+        args.Push(env.Pop())
     }
-    Reverse(args)
+    args.Reverse()
 
-    if res, cached := m.Get(args); cached {
+    if res, cached := m.Get(args.Contents()); cached {
         env.Push(res)
         return
     }
-    for _, a := range args {
-        env.Push(a)
-    }
+    env.Pusha(args)
     m.block.Run(env)
-    m.Set(args, env.Get(0))
+    m.Set(args.Contents(), env.Get(0))
 }
 // >>>>
 // The stack// <<<<
@@ -87,7 +72,7 @@ func wrap(a interface{}) interface{} {              // Just convert type
     return a
 }
 
-type Stack []interface{}
+type Stack []interface{}        // A wrapper for []interface{}, also acts as the main stack
 
 func NewStack(x []interface{}) *Stack {
     new_stack := new(Stack)
@@ -107,7 +92,6 @@ func (x * Stack) Pusha(as *Stack) {
 
 func (x * Stack) Pop() (a interface{}) {
     a, *x = (*x)[0], (*x)[1:]
-    // TODO reset env.marks if needed
     return
 }
 
@@ -115,6 +99,7 @@ func (x * Stack) Get(ind int) interface{} {
     return (*x)[ind]
 }
 
+// The unpacking methods for usage in operators' parameter passing
 func (x * Stack) Get1() interface{} {
     return (*x)[0]
 }
@@ -131,16 +116,12 @@ func (x * Stack) Get4() (interface{}, interface{}, interface{}, interface{}) {
     return (*x)[0], (*x)[1], (*x)[2], (*x)[3]
 }
 
-func (x * Stack) Cut(a, b int) *Stack {
-    return NewStack((*x)[a:b])
-}
-
 func (x * Stack) Dump() {
-    fmt.Println("--- Top of Stack ---")
+    fmt.Println("\x1b[32m--- Top ---\x1b[0m")
     for _, i := range *x {
         fmt.Println(to_v(i))
     }
-    fmt.Println("--- Bottom of Stack ---")
+    fmt.Println("\x1b[32m--- Bottom ---\x1b[0m")
 }
 
 func (x * Stack) Clear() {
@@ -162,12 +143,6 @@ func (x * Stack) Switch(a, b int) {
 func (x * Stack) Reverse() {    // Reverse in-place
     for i, j := 0, x.Size() - 1; i <= j; i, j = i + 1, j - 1 {
         x.Switch(i, j)
-    }
-}
-
-func Reverse(arr []interface{}) {    // Reverse in-place
-    for i, j := 0, len(arr) - 1; i <= j; i, j = i + 1, j - 1 {
-        arr[i], arr[j] = arr[j], arr[i]
     }
 }
 // >>>>
@@ -218,16 +193,6 @@ func (env * Environ) Pop() (a interface{}) {    // Wraps the Stack.pop() method 
             env.marks[i] = size
         }
     }
-    return
-}
-
-func (env * Environ) Pop2() (a, b interface{}) {
-    b, a = env.Pop(), env.Pop()
-    return
-}
-
-func (env * Environ) Pop3() (a, b, c interface{}) {
-    c, b, a = env.Pop(), env.Pop(), env.Pop()
     return
 }
 
@@ -290,6 +255,7 @@ func (env * Environ) InitVars() {
 
 func (env * Environ) ResetVars() {
     env.vars = make([]interface{}, 0)
+    env.InitVars()
     //env.longVars = make(map[string]interface{})
 }
 // >>>>
@@ -367,10 +333,6 @@ func type_eq(a interface{}, typ rune) bool {
     panic("Invalid typename!: `" + string(typ) + "`")
 }
 
-func any_of(a, b interface{}, typ string) bool {
-    return typeof(a) == typ || typeof(b) == typ
-}
-
 func is_n(a interface{}) bool {
     return is_i(a) || is_d(a)
 }
@@ -400,7 +362,7 @@ func is_b(a interface{}) bool {
 }
 
 func any_double(a, b interface{}) bool {
-    return any_of(a, b, "double")
+    return typeof(a) == "double" || typeof(b) == "double"
 }
 //>>>>
 // Type conversions// <<<<
@@ -474,7 +436,6 @@ func to_l(a interface{}) []interface{} {
         // is used
         return wrapa(b)
     }
-    return nil
 }
 
 func to_b(a interface{}) *Block {
@@ -520,7 +481,7 @@ func to_s(a interface{}) string {
     case error:
         return b.Error()
     default:
-        return fmt.Sprint(b)
+        return fmt.Sprint(b)    // To simplify string conversion
     }
 }
 
@@ -543,9 +504,8 @@ func to_v(a interface{}) string {       // To value string
         return s[:len(s) - 1] + "]"
     case is_b(a):
         return to_b(a).String()
-    default:
-        panic(fmt.Sprintf("Invalid type %s!", fulltype(a)))
     }
+    panic(fmt.Sprintf("Invalid type %s!", fulltype(a)))
 }
 
 func to_bool(a interface{}) bool {
@@ -580,11 +540,11 @@ func NewBlock(ops []*Op, offsets [][2]int, wb bool, parser *Parser) *Block {
     panic("Sizes not matched!")
 }
 
-var SIGNAL string = "!#\ufdd0"
+const SIGNAL string = "!#\ufdd0"
 
 func (b * Block) Run(env * Environ) {
     for i, op := range b.Ops {
-        if i == 0 {
+        if i == 0 {         // Only setup handler once
             defer func() {
                 if err := recover(); err != nil {
                     offsets := b.Offsets[i]
@@ -598,11 +558,11 @@ func (b * Block) Run(env * Environ) {
     %s
     %s^
 `,
-                    // Both line number and column should start from 1.
+                    // Line number should start from 1.
                     b.parser.GetSrc(), lnum + 1,
                     strings.Split(string(b.parser.content), "\n")[lnum],
                     strings.Repeat(" ", column - 1))
-                    panic(SIGNAL)
+                    panic(SIGNAL)   // Panics a dummy signal to upper levels to report error
                 }
             }()
         }
@@ -611,20 +571,23 @@ func (b * Block) Run(env * Environ) {
 }
 
 func (b * Block) String() string {
-    var s []byte
+    s := ""
     if b.withbrace {
-        s = append(s, '{')
+        s += "{"
     }
     for _, op := range b.Ops {
-        s = append(s, append([]byte(op.String()), ' ')...)
+        s += op.String() + " "
     }
-    if len(s) == 0 {
+    size := len(s)
+    if size == 0 {
         return ""
     }
-    if s[len(s) - 1] == ' ' {
-        s[len(s) - 1] = '}'
-    } else if b.withbrace {
-        s = append(s, '}')
+    if b.withbrace {
+        if s[size - 1] == ' ' {
+            s = s[:size - 1] + "}"
+        } else {
+            s += "}"
+        }
     }
     return string(s)
 }
@@ -680,8 +643,7 @@ func findOp(name string) *Op {
 func op_push(a interface{}) *Op {
     return &Op{to_v(a),
         []TypedFunc{
-            {"",
-            0x10,
+            {"", 0x10,
             func(env * Environ, x * Stack) *Stack {
                 return wraps(a)
             }},
@@ -691,8 +653,7 @@ func op_push(a interface{}) *Op {
 func op_pushVar(s string) *Op {
     return &Op{":" + s,
     []TypedFunc{
-        {"",
-        0x10,
+        {"", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a := env.GetVar(s)
             if ! is_b(a) {
@@ -881,7 +842,7 @@ func (op * Op) Run(env * Environ) {
     // For simplicity, the top of the stack is args[0]
     // But the arguments passed to Op.Run() is in the reverse direction
     //           -----------
-    // args[0]    Environ top   c
+    // args[0]    Stack top     c
     //           -----------
     // args[1]       ...        b
     //           -----------
@@ -912,8 +873,7 @@ func (op * Op) Run(env * Environ) {
     if match > 0 {
         // Prepare the arguements; switch if needed
         op_func := op.Funcs[func_no]
-        switch_opts := op_func.Option & 0x0F
-        sw_s, sw_e := int(switch_opts & 0x0C), int(switch_opts & 0x03)
+        sw_s, sw_e := int(op_func.Option & 0x0C), int(op_func.Option & 0x03)
 
         args := NewStack(nil)
         for i := 0; i < func_arity; i ++ {
@@ -924,8 +884,7 @@ func (op * Op) Run(env * Environ) {
         }
 
         // Calling the function
-        result := op_func.Func(env, args)
-        if result != nil {
+        if result := op_func.Func(env, args); result != nil {
             env.Pusha(result)
         }
     } else {
@@ -1001,14 +960,6 @@ func (p * Parser) Unread() error {
     p.Offset --
     p.ptr --
     return nil
-}
-
-func (p * Parser) UnreadN(n int) {
-    for i := 0; i < n; i ++ {
-        if p.Unread() != nil {
-            panic(fmt.Sprintf("UnreadN(%d) reached start!", n))
-        }
-    }
 }
 
 func parse(code *Parser, withbrace bool) *Block {
@@ -2571,10 +2522,9 @@ func InitFuncs() {
         // Do-while (without popping the condition)
         {"b", 0x10,
         func(env * Environ, x * Stack) *Stack {
-            a := env.Pop()
-            ab := to_b(a)
+            ab := to_b(x.Get1())
             ab.Run(env)
-            for to_bool(x.Get(0)) {
+            for to_bool(env.Get(0)) {
                 ab.Run(env)
             }
             return nil
@@ -3727,7 +3677,7 @@ func split(s, sub []interface{}, empty bool) []interface{} {
             m = -1
         }
     }
-    t := s[x:len(s)]
+    t := s[x:]
     if empty || ! (len(t) == 0) {
         l = append(l, t)
     }
@@ -3779,12 +3729,7 @@ func comp(a, b interface{}) int {
     if is_l(a) && is_l(b) {
         al, bl := to_l(a), to_l(b)
         as, bs := len(al), len(bl)
-        size := 0
-        if as < bs {
-            size = as
-        } else {
-            size = bs
-        }
+        size := int(math.Min(float64(as), float64(bs)))
         for i := 0; i < size; i ++ {
             res := comp(al[i], bl[i])
             if res != 0 {
@@ -3920,14 +3865,6 @@ func main() {
             goto next
         }
 
-        //// For debug
-        //parser = NewParser("<stdin>", code_str)
-        //block = parse(parser, false)
-        //fmt.Println("Block:", block)
-        //block.Run(env)
-        //env.stack.Dump()
-        //env.stack.Clear()
-
         // Parsing
         parser = NewParser("<stdin>", code_str)
         func() {
@@ -3949,7 +3886,6 @@ func main() {
         if block == nil {
             goto next
         }
-        fmt.Println("Block:", block)
 
         // Running
         func() {
