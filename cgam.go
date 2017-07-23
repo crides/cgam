@@ -116,12 +116,32 @@ func (x * Stack) Get4() (interface{}, interface{}, interface{}, interface{}) {
     return (*x)[0], (*x)[1], (*x)[2], (*x)[3]
 }
 
-func (x * Stack) Dump() {
-    fmt.Println("\x1b[32m--- Top ---\x1b[0m")
-    for _, i := range *x {
-        fmt.Println(to_v(i))
+const (
+    DUMP_VERTICAL   = iota
+    DUMP_HORIZONTAL
+    DUMP_STRING
+)
+
+func (x * Stack) Dump(opt int) {
+    switch opt {
+    case DUMP_VERTICAL:
+        fmt.Println("\x1b[32m--- Top ---\x1b[0m")
+        for _, i := range *x {
+            fmt.Println(to_v(i))
+        }
+        fmt.Println("\x1b[32m--- Bottom ---\x1b[0m")
+    case DUMP_HORIZONTAL:
+        fmt.Print("\x1b[32med: stack:\x1b[0m[")
+        if x.Size() > 0 {
+            fmt.Print(to_v(x.Get(x.Size() - 1)))
+            for i := x.Size() - 2; i >= 0 ; i -- {
+                fmt.Print(" " + to_v(x.Get(i)))
+            }
+        }
+        fmt.Println("]")
+    case DUMP_STRING:
+        fmt.Println(to_s(x.Contents()))
     }
-    fmt.Println("\x1b[32m--- Bottom ---\x1b[0m")
 }
 
 func (x * Stack) Clear() {
@@ -157,14 +177,14 @@ type Environ struct {
     args        []string
 }
 
-func NewEnviron() *Environ {
+func NewEnviron(args []string) *Environ {
     env := &Environ{NewStack(nil),
                     make([]int, 0),
                     nil,
                     rand.New(rand.NewSource(time.Now().UnixNano())),
                     make([]interface{}, 0),
                     make(map[string]interface{}),
-                    os.Args[1:]}
+                    args}
     env.InitVars()
     return env
 }
@@ -963,6 +983,19 @@ func (p * Parser) Unread() error {
 }
 
 func parse(code *Parser, withbrace bool) *Block {
+    defer func() {
+        if err := recover(); err != nil {
+            fmt.Println("\x1b[31mERROR\x1b[0m: Parser:", err)
+            fmt.Printf(
+`  at %s line %d:
+    %s
+    %s^
+`,
+            code.GetSrc(), code.LnNum + 1,
+            strings.Split(string(code.content), "\n")[code.LnNum],
+            strings.Repeat(" ", code.Offset - 1))
+        }
+    }()
     ops := make([]*Op, 0)
     offsets := make([][2]int, 0)
 
@@ -2107,7 +2140,7 @@ func InitFuncs() {
         // Debug (Dump stack)
         {"", 0x10,
         func(env * Environ, x * Stack) *Stack {
-            env.stack.Dump()
+            env.stack.Dump(DUMP_HORIZONTAL)
             return nil
         }},
     }})// >>>>
@@ -3842,6 +3875,23 @@ func round(x, unit float64) float64 {
 }
 // >>>>
 // Main// <<<<
+const VERSION = "1.0"
+
+const (
+    CODE_FILE       = iota + 1
+    CODE_IMMEDIATE
+    CODE_REPL
+)
+
+type Codetype struct {
+    typ     int
+    data    string
+}
+
+func NewCodetype(t int, d string) *Codetype {
+    return &Codetype{t, d}
+}
+
 func main() {
     signals := make(chan os.Signal, 1)
     signal.Notify(signals, syscall.SIGINT)
@@ -3851,11 +3901,45 @@ func main() {
             exit()
         }
     }()
+
+    codes := make([]Codetype, 0)
+    cur_opt := 0
+    cgam_args := make([]string, 0)
+    code_num := 1
+    // TODO Parse options
+    for i, opt := range os.Args[1:] {
+        switch opt {
+        case "-v", "--version":
+            fmt.Println("Cgam v" + VERSION)
+            return
+        case "-h", "--help":
+            fmt.Printf(
+`Usage: %s [OPTION] [-- cgam_program_options]
+`, os.Args[0])
+            return
+        case "-f", "--file":
+            cur_opt = CODE_FILE
+        case "-c", "--code":
+            cur_opt = CODE_IMMEDIATE
+        case "-i", "--repl":
+            cur_opt = CODE_REPL
+        case "--":
+            cgam_args = os.Args[i + 1:]
+            goto end_opts
+        default:
+            codes = append(codes, NewCodetype(cur_opt, 
+        }
+    }
+
+end_opts:
     env := NewEnviron()
     InitFuncs()
+    repl(env)
+}
 
+func repl(env * Environ) {
     input := bufio.NewScanner(os.Stdin)
-    fmt.Println("Cgam v1.0.0 by Steven.")
+    fmt.Printf("Cgam v%s by Steven.\n", VERSION)
     fmt.Print(">>> ")
     for input.Scan() {
         var block *Block
@@ -3867,22 +3951,7 @@ func main() {
 
         // Parsing
         parser = NewParser("<stdin>", code_str)
-        func() {
-            defer func() {
-                if err := recover(); err != nil {
-                    fmt.Println("\x1b[31mERROR\x1b[0m: Parser:", err)
-                    fmt.Printf(
-`  at %s line %d:
-    %s
-    %s^
-`,
-                    parser.GetSrc(), parser.LnNum + 1,
-                    strings.Split(string(parser.content), "\n")[parser.LnNum],
-                    strings.Repeat(" ", parser.Offset - 1))
-                }
-            }()
-            block = parse(parser, false)
-        }()
+        block = parse(parser, false)
         if block == nil {
             goto next
         }
@@ -3893,7 +3962,7 @@ func main() {
                 recover()   // Nothing, just empty `catch`
             }()
             block.Run(env)
-            env.stack.Dump()
+            env.stack.Dump(DUMP_VERTICAL)
         }()
         env.stack.Clear()
 next:
