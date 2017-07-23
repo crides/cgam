@@ -3904,8 +3904,7 @@ func main() {
 
     codes := make([]Codetype, 0)
     cur_opt := 0
-    cgam_args := make([]string, 0)
-    code_num := 1
+    var cgam_args []string
     // TODO Parse options
     for i, opt := range os.Args[1:] {
         switch opt {
@@ -3922,19 +3921,32 @@ func main() {
         case "-c", "--code":
             cur_opt = CODE_IMMEDIATE
         case "-i", "--repl":
-            cur_opt = CODE_REPL
+            codes = append(codes, NewCodetype(CODE_REPL, ""))
+	    cur_opts = 0
         case "--":
             cgam_args = os.Args[i + 1:]
             goto end_opts
         default:
-            codes = append(codes, NewCodetype(cur_opt, 
+	    if cur_opts == 0 {
+		fmt.Println("Invalid option " + opt + "!")
+		return
+            } else {
+                codes = append(codes, NewCodetype(cur_opt, opt))
+            }
         }
     }
 
 end_opts:
-    env := NewEnviron()
+    env := NewEnviron(cgam_args)
     InitFuncs()
-    repl(env)
+    icode_num := 1
+    for _, code := codes {
+	switch code.opt {
+	case CODE_REPL:
+            repl(env)
+	case CODE_FILE:
+            parser = NewParser("<stdin>", code_str)
+            block = parse(parser, false)
 }
 
 func repl(env * Environ) {
