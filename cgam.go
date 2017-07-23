@@ -273,10 +273,27 @@ func (env * Environ) InitVars() {
     //                                 L   M    N    O   P        Q   R    S   T  U  V  W   X  Y  Z
 }
 
-func (env * Environ) ResetVars() {
-    env.vars = make([]interface{}, 0)
-    env.InitVars()
-    //env.longVars = make(map[string]interface{})
+const (
+    CLEAR_STACK     = 1 << (iota + 1)
+    CLEAR_VARS
+    CLEAR_LONGVARS
+    CLEAR_NAMESPACE
+)
+
+func (env * Environ) Clear(int opts) {
+    if opts & CLEAR_STACK > 0 {
+        env.stack.Clear()
+    }
+    if opts & CLEAR_VARS {
+        env.vars = make([]interface{}, 0)
+        env.InitVars()
+    }
+    if opts & CLEAR_LONGVARS {
+        env.longVars = make([]interface{}, 0)
+    }
+    if opts & CLEAR_NAMESPACE {
+        // TODO
+    }
 }
 // >>>>
 // Type predicates//<<<<
@@ -2106,7 +2123,11 @@ func InitFuncs() {
         // CLI arguments
         {"", 0x10,
         func(env * Environ, x * Stack) *Stack {
-            return wraps(env.args)
+            args := wrapa()
+            for _, arg := range env.args {
+                args = append(args, arg)
+            }
+            return wraps(args)
         }},
     }})// >>>>
     addOp(&Op{"ec",// From `e=` to `ec`; Added blocks // <<<<
@@ -3880,7 +3901,7 @@ const VERSION = "1.0"
 const (
     CODE_FILE       = iota + 1
     CODE_IMMEDIATE
-    CODE_REPL
+    //CODE_REPL
 )
 
 type Codetype struct {
@@ -3890,6 +3911,26 @@ type Codetype struct {
 
 func NewCodetype(t int, d string) *Codetype {
     return &Codetype{t, d}
+}
+
+func usage() {
+    fmt.Printf(
+`Usage: %s [OPTION] [-- cgam_program_options]
+  or %s
+Run Cgam programs.
+
+Options:
+  -c, --code code_pieces    Treat the arguments as Cgam programs and run them.
+  -f, --file files          Read programs from the files and run them.
+  -i, --repl                Enter the REPL (Read-Eval-Print-Loop).
+
+  -h, --help                Show this help message and exit.
+  -v, --version             Show the version number and exit.
+
+Note: When no option is provided, REPL would be entered by default. If '-c' or '-f' is used, the code pieces are executed in order. So if you want to use REPL after executing code from '-c' or '-f', you should specify a '-i' in the end and before '--', if it exists.
+Options after '--' are passed to the underlying Cgam programs and can be accessed by using 'ea'.
+`, os.Args[0], os.Args[0])
+    os.Exit(1)
 }
 
 func main() {
@@ -3902,9 +3943,10 @@ func main() {
         }
     }()
 
-    codes := make([]Codetype, 0)
+    codes := make([]*Codetype, 0)
     cur_opt := 0
     var cgam_args []string
+    _repl := true
     // TODO Parse options
     for i, opt := range os.Args[1:] {
         switch opt {
@@ -3912,24 +3954,23 @@ func main() {
             fmt.Println("Cgam v" + VERSION)
             return
         case "-h", "--help":
-            fmt.Printf(
-`Usage: %s [OPTION] [-- cgam_program_options]
-`, os.Args[0])
-            return
+            usage()
         case "-f", "--file":
             cur_opt = CODE_FILE
+            _repl = false
         case "-c", "--code":
             cur_opt = CODE_IMMEDIATE
+            _repl = false
         case "-i", "--repl":
-            codes = append(codes, NewCodetype(CODE_REPL, ""))
-	    cur_opts = 0
+            _repl = true
+            cur_opt = 0
         case "--":
-            cgam_args = os.Args[i + 1:]
+            cgam_args = os.Args[i + 2:]     // Add 2 because we start from os.Args[1]
             goto end_opts
         default:
-	    if cur_opts == 0 {
-		fmt.Println("Invalid option " + opt + "!")
-		return
+            if cur_opt == 0 {
+                fmt.Printf("Invalid option %s!\n", opt)
+                usage()
             } else {
                 codes = append(codes, NewCodetype(cur_opt, opt))
             }
@@ -3940,13 +3981,37 @@ end_opts:
     env := NewEnviron(cgam_args)
     InitFuncs()
     icode_num := 1
-    for _, code := codes {
-	switch code.opt {
-	case CODE_REPL:
-            repl(env)
-	case CODE_FILE:
-            parser = NewParser("<stdin>", code_str)
-            block = parse(parser, false)
+    for _, code := range codes {
+        switch code.typ {
+        case CODE_FILE:
+            file_data, err := ioutil.ReadFile(code.data)
+            if err != nil {
+                fmt.Println(err)
+                return
+            }
+            parser := NewParser(code.data, string(file_data))
+            block := parse(parser, false)
+            if block != nil {
+                block.Run(env)
+                env.stack.Dump(DUMP_STRING)
+                env.Clear(CLEAR_STACK)
+            }
+        case CODE_IMMEDIATE:
+            parser := NewParser(fmt.Sprintf("<Code#%d>", icode_num), code.data)
+            block := parse(parser, false)
+            if block != nil {
+                block.Run(env)
+                env.stack.Dump(DUMP_STRING)
+                env.Clear(CLEAR_STACK)
+            }
+            icode_num ++
+        default:
+            panic("Invalid option!")
+        }
+    }
+    if _repl {
+        repl(env)
+    }
 }
 
 func repl(env * Environ) {
@@ -3976,7 +4041,7 @@ func repl(env * Environ) {
             block.Run(env)
             env.stack.Dump(DUMP_VERTICAL)
         }()
-        env.stack.Clear()
+        env.Clear(CLEAR_STACK)
 next:
         fmt.Print(">>> ")
     }
@@ -3988,4 +4053,4 @@ func exit() {
     os.Exit(0)
 }
 // >>>>
-// vim: set foldmethod=marker foldmarker=<<<<,>>>>
+// vi:fdm=marker:fmr=<<<<,>>>>
