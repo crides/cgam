@@ -269,29 +269,29 @@ func (env * Environ) InitVars() {
     for i := 0; i <= 10; i ++ {
         env.vars = append(env.vars, 10 + i)
     }
-    env.vars = append(env.vars, wrapa([]rune{}, []rune{}, []rune{'\n'}, []rune{}, math.Pi, []rune{}, []rune{}, []rune{' '}, 0, 0, 0, -1, 1, 2, 3)...)
-    //                                 L   M    N    O   P        Q   R    S   T  U  V  W   X  Y  Z
+    env.vars = append(env.vars, wrapa("", "", "\n", "", math.Pi, "", "", " ", 0, 0, 0, -1, 1, 2, 3)...)
+    //                                 L   M    N    O   P        Q   R   S   T  U  V  W   X  Y  Z
 }
 
 const (
-    CLEAR_STACK     = 1 << (iota + 1)
-    CLEAR_VARS
-    CLEAR_LONGVARS
-    CLEAR_NAMESPACE
+    RESET_STACK     = 1 << (iota + 1)
+    RESET_VARS
+    RESET_LONGVARS
+    RESET_NAMESPACE
 )
 
-func (env * Environ) Clear(int opts) {
-    if opts & CLEAR_STACK > 0 {
+func (env * Environ) Clear(opts int) {
+    if opts & RESET_STACK > 0 {
         env.stack.Clear()
     }
-    if opts & CLEAR_VARS {
+    if opts & RESET_VARS > 0 {
         env.vars = make([]interface{}, 0)
         env.InitVars()
     }
-    if opts & CLEAR_LONGVARS {
-        env.longVars = make([]interface{}, 0)
+    if opts & RESET_LONGVARS > 0 {
+        env.longVars = make(map[string]interface{}, 0)
     }
-    if opts & CLEAR_NAMESPACE {
+    if opts & RESET_NAMESPACE > 0 {
         // TODO
     }
 }
@@ -299,7 +299,7 @@ func (env * Environ) Clear(int opts) {
 // Type predicates//<<<<
 func typeof(a interface{}) string {
     switch a.(type) {
-    case []rune, string:
+    case string:
         return "string"
     case []interface{}:
         for _, i := range a.([]interface{}) {
@@ -418,9 +418,6 @@ func to_d(a interface{}) float64 {
     case string:
         r, _ := strconv.ParseFloat(b, 64)
         return r
-    case []rune:
-        r, _ := strconv.ParseFloat(string(b), 64)
-        return r
     default:
         not_convertible(a, "double")
     }
@@ -443,9 +440,6 @@ func to_i(a interface{}) int {
     case string:
         r, _ := strconv.ParseInt(b, 10, 0)
         return int(r)
-    case []rune:
-        r, _ := strconv.ParseInt(string(b), 10, 0)
-        return int(r)
     default:
         not_convertible(a, "int")
     }
@@ -457,12 +451,6 @@ func to_l(a interface{}) []interface{} {
     case []interface{}:
         return b
     case string:
-        as := make([]interface{}, 0)
-        for _, i := range []rune(b) {
-            as = append(as, wrap(i))
-        }
-        return as
-    case []rune:
         as := make([]interface{}, 0)
         for _, i := range b {
             as = append(as, wrap(i))
@@ -503,8 +491,6 @@ func to_s(a interface{}) string {
     switch b := a.(type) {
     case string:
         return b
-    case []rune:
-        return string(b)
     case rune:
         return string(b)
     case []interface{}:
@@ -553,7 +539,7 @@ func to_bool(a interface{}) bool {
         return b != 0
     case []interface{}:
         return len(b) != 0
-    case []rune:
+    case string:
         return len(b) != 0
     default:
         not_convertible(a, "bool")
@@ -1098,7 +1084,7 @@ func parseOp(code *Parser) *Op {
     case '{':       // Block
         return op_push(parse(code, true))
     case '"':       // String
-        var str []rune
+        str := ""
         for char, err := code.Read(); err == nil; char, err = code.Read() {
             if char == '"' {
                 return op_push(str)
@@ -1113,7 +1099,7 @@ func parseOp(code *Parser) *Op {
                     char = c
                 }
             }
-            str = append(str, char)
+            str += string(char)
         }
         panic("Unfinished string!")
 
@@ -1567,7 +1553,7 @@ func InitFuncs() {
         {"cc", 0x10,
         func(env * Environ, x * Stack) *Stack {
             a, b := x.Get2()
-            return wraps([]rune{a.(rune), b.(rune)})
+            return wraps(to_s(a) + to_s(b))
         }},
 
         // Character incrementation (-> Char)
@@ -2599,7 +2585,7 @@ func InitFuncs() {
         func(env * Environ, x * Stack) *Stack {
             input := bufio.NewScanner(os.Stdin)
             if input.Scan() {
-                return wraps([]rune(input.Text()))
+                return wraps(input.Text())
             }
             return wraps("\n")
         }},
@@ -3302,7 +3288,7 @@ func InitFuncs() {
         {"", 0x10,
         func(env * Environ, x * Stack) *Stack {
             data, _ := ioutil.ReadAll(os.Stdin)
-            return wraps([]rune(string(data)))
+            return wraps(string(data))
         }},
     }})// >>>>
     // The `regex` module// <<<<
@@ -3923,12 +3909,15 @@ Options:
   -c, --code code_pieces    Treat the arguments as Cgam programs and run them.
   -f, --file files          Read programs from the files and run them.
   -i, --repl                Enter the REPL (Read-Eval-Print-Loop).
+  -r, --reset RESET_OPTS    Reset the things in RESET_OPTS between executing different code pieces and between different lines in the REPL.
 
   -h, --help                Show this help message and exit.
   -v, --version             Show the version number and exit.
 
 Note: When no option is provided, REPL would be entered by default. If '-c' or '-f' is used, the code pieces are executed in order. So if you want to use REPL after executing code from '-c' or '-f', you should specify a '-i' in the end and before '--', if it exists.
 Options after '--' are passed to the underlying Cgam programs and can be accessed by using 'ea'.
+
+RESET_OPTS can be one or more of stack, vars, lvars, ns, seperated by comma. If any is specified, then after executing a piece of code, the corresponding thing is reseted (or cleared). If nothing is to be reseted, then an empty string should be specified. Defaults to 'stack,vars'.
 `, os.Args[0], os.Args[0])
     os.Exit(1)
 }
@@ -3947,8 +3936,10 @@ func main() {
     cur_opt := 0
     var cgam_args []string
     _repl := true
+    reset_opts := RESET_STACK | RESET_VARS
     // TODO Parse options
-    for i, opt := range os.Args[1:] {
+    for i := 1; i < len(os.Args); i ++ {
+        opt := os.Args[i]
         switch opt {
         case "-v", "--version":
             fmt.Println("Cgam v" + VERSION)
@@ -3964,8 +3955,29 @@ func main() {
         case "-i", "--repl":
             _repl = true
             cur_opt = 0
+        case "-r", "--reset":
+            r_opts := strings.Split(os.Args[i + 1], ",")
+            i ++
+            if len(r_opts) != 0 {
+                reset_opts = 0
+                for _, r_opt := range r_opts {
+                    switch r_opt {
+                    case "stack":
+                        reset_opts |= RESET_STACK
+                    case "vars":
+                        reset_opts |= RESET_VARS
+                    case "lvars":
+                        reset_opts |= RESET_LONGVARS
+                    case "ns":
+                        reset_opts |= RESET_NAMESPACE
+                    default:
+                        fmt.Println("Invalid reset option!")
+                        return
+                    }
+                }
+            }
         case "--":
-            cgam_args = os.Args[i + 2:]     // Add 2 because we start from os.Args[1]
+            cgam_args = os.Args[i + 1:]     // Add 2 because we start from os.Args[1]
             goto end_opts
         default:
             if cur_opt == 0 {
@@ -3984,37 +3996,45 @@ end_opts:
     for _, code := range codes {
         switch code.typ {
         case CODE_FILE:
-            file_data, err := ioutil.ReadFile(code.data)
-            if err != nil {
-                fmt.Println(err)
-                return
-            }
-            parser := NewParser(code.data, string(file_data))
-            block := parse(parser, false)
-            if block != nil {
-                block.Run(env)
-                env.stack.Dump(DUMP_STRING)
-                env.Clear(CLEAR_STACK)
-            }
+            exe_file(env, code.data, reset_opts)
         case CODE_IMMEDIATE:
-            parser := NewParser(fmt.Sprintf("<Code#%d>", icode_num), code.data)
-            block := parse(parser, false)
-            if block != nil {
-                block.Run(env)
-                env.stack.Dump(DUMP_STRING)
-                env.Clear(CLEAR_STACK)
-            }
+            exe_code(env, code.data, icode_num, reset_opts)
             icode_num ++
         default:
             panic("Invalid option!")
         }
     }
     if _repl {
-        repl(env)
+        repl(env, reset_opts)
     }
 }
 
-func repl(env * Environ) {
+func exe_code(env * Environ, code string, code_num, r_opt int) {
+    parser := NewParser(fmt.Sprintf("<Code#%d>", code_num), code)
+    block := parse(parser, false)
+    if block != nil {
+        block.Run(env)
+        env.stack.Dump(DUMP_STRING)
+        env.Clear(r_opt)
+    }
+}
+
+func exe_file(env * Environ, fname string, r_opt int) {
+    file_data, err := ioutil.ReadFile(fname)
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
+    parser := NewParser(fname, string(file_data))
+    block := parse(parser, false)
+    if block != nil {
+        block.Run(env)
+        env.stack.Dump(DUMP_STRING)
+        env.Clear(r_opt)
+    }
+}
+
+func repl(env * Environ, r_opt int) {
     input := bufio.NewScanner(os.Stdin)
     fmt.Printf("Cgam v%s by Steven.\n", VERSION)
     fmt.Print(">>> ")
@@ -4041,7 +4061,7 @@ func repl(env * Environ) {
             block.Run(env)
             env.stack.Dump(DUMP_VERTICAL)
         }()
-        env.Clear(CLEAR_STACK)
+        env.Clear(r_opt)
 next:
         fmt.Print(">>> ")
     }
